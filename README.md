@@ -14,8 +14,8 @@ launchd  ──►  run.sh <daily|weekly>  ──►  claude -p (headless, recom
    │                                          • writes run log to the vault
    │                                          • saves session id for resume
    └─ schedule:                          ──►  notify.sh  → macOS banner + ntfy push
-        daily  Tue–Fri 09:00 (+0800)
-        weekly Sat     09:00 (+0800)
+        daily  Tue–Sat 09:00 (+0800)   # Sat reviews Fri's close
+        weekly Sat     09:30 (+0800)   # after the Sat daily
 
 You, later:   watcher-followup <daily|weekly>  ──►  claude -r <saved session>
               (full context loaded; you're present → it CAN place orders)
@@ -136,7 +136,7 @@ if you need a new indicator.
 ## Gateway / auth notes
 
 - IB Gateway (`algo-trader-ib-gateway-1`, port 4001) **auto-restarts 23:59 Asia/Taipei**;
-  the API handshake fails for ~1–2 min during re-auth. The schedules (both 09:00 +0800) avoid
+  the API handshake fails for ~1–2 min during re-auth. The schedules (09:00 / 09:30 +0800) avoid
   that window. `run.sh` does a TCP probe and logs a WARN (non-fatal) if 4001 is unreachable.
 - Confirm gateway readiness: `docker logs algo-trader-ib-gateway-1 | grep "Login has completed"`.
 - If a run **FAILED** (you'll get a push + `rc≠0` in `logs/daily.log`), check

@@ -11,16 +11,19 @@
         <string>daily</string>
     </array>
 
-    <!-- Tue–Fri 09:00 Taipei (Mac local +0800): reviews the prior US 16:00 ET close,
-         which by then is fully settled (≈5h after close, past after-hours) and well
-         before the next US pre-market — so no pre-market noise contaminates the read.
-         Friday's close (Sat 09:00 Taipei) is covered by the Saturday weekly job. -->
+    <!-- Tue–Sat 09:00 Taipei (Mac local +0800; launchd Weekday: Tue=2 … Sat=6). Each run
+         reviews the PRIOR US session's 16:00 ET close, which by 09:00 Taipei is fully
+         settled (≈5h after close, past after-hours) and well before the next pre-market —
+         so no pre-market noise contaminates the read. Mapping: Tue→Mon, Wed→Tue, Thu→Wed,
+         Fri→Thu, Sat→Fri. The Saturday run is what reviews Friday's close (incl. the §1.6
+         binding soft triggers); the weekly §2 review runs Sat 09:30, after this. -->
     <key>StartCalendarInterval</key>
     <array>
         <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
         <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
         <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
         <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
     </array>
 
     <key>EnvironmentVariables</key>

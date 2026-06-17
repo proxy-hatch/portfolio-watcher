@@ -38,7 +38,7 @@ OUT="$LOGDIR/$KIND-$TS.json"
 ERR="$LOGDIR/$KIND-$TS.err"
 mkdir -p "$LOGDIR" "$DIR/state"
 
-# --- IB Gateway readiness: TCP probe (daily/weekly 09:00 are far from the
+# --- IB Gateway readiness: TCP probe (daily/weekly 09:00–09:30 are far from the
 #     23:59 Taipei restart, so this should normally pass). Informational only. ---
 if ! /usr/bin/nc -z -G 5 127.0.0.1 4001 2>/dev/null; then
   echo "[$(date)] WARN: gateway TCP 127.0.0.1:4001 not accepting — running anyway" >> "$ERR"
