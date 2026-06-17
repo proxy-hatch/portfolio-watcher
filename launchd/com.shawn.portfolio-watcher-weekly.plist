@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shawn.portfolio-watcher-weekly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/shawn/workspace/portfolio-watcher/run.sh</string>
+        <string>weekly</string>
+    </array>
+
+    <!-- Saturday 09:00 Taipei: weekly review; also serves as Friday's daily
+         (Fri 16:00 ET = Sat 04:00 Taipei). -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>/Users/shawn</string>
+        <key>PATH</key><string>/Users/shawn/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/shawn/workspace/portfolio-watcher/logs/launchd-weekly.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/shawn/workspace/portfolio-watcher/logs/launchd-weekly.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

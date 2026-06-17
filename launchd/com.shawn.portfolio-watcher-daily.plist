@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shawn.portfolio-watcher-daily</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/shawn/workspace/portfolio-watcher/run.sh</string>
+        <string>daily</string>
+    </array>
+
+    <!-- Tue–Fri 16:30 Taipei (Mac local +0800): reviews the prior US 16:00 ET close.
+         Friday's close (Sat 04:00 Taipei) is covered by the Saturday weekly job. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>/Users/shawn</string>
+        <key>PATH</key><string>/Users/shawn/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/shawn/workspace/portfolio-watcher/logs/launchd-daily.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/shawn/workspace/portfolio-watcher/logs/launchd-daily.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
