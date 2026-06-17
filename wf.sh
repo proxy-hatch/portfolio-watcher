@@ -6,6 +6,7 @@
 # auto-reconnects the transport. Used by the Blink Shell Home-Screen shortcuts.
 emulate -L zsh
 set -u
+DIR=${0:A:h}                       # repo dir (resolves the ~/.local/bin/wf symlink)
 KIND=${1:-daily}
 case "$KIND" in daily|weekly) ;; *) echo "usage: wf <daily|weekly>" >&2; exit 64 ;; esac
-exec /opt/homebrew/bin/tmux new-session -A -s "wf-$KIND" "watcher-followup $KIND"
+exec /opt/homebrew/bin/tmux -f "$DIR/tmux.conf" new-session -A -s "wf-$KIND" "watcher-followup $KIND"
