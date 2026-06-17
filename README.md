@@ -27,6 +27,9 @@ modifies, or cancels orders. All order placement happens in the interactive
 
 > **First-time install (fresh machine):** see **[SETUP.md](SETUP.md)** — IB Gateway via
 > Docker, ibkr-cli, `uv sync`, Claude CLI, ntfy, and installing the launchd jobs.
+>
+> **Chat with a session from your phone (AFK):** see **[MOBILE.md](MOBILE.md)** — Tailscale
+> (handles dynamic IP) + Blink/mosh + two Home-Screen icons for daily/weekly.
 
 ---
 
@@ -36,6 +39,7 @@ modifies, or cancels orders. All order placement happens in the interactive
 |---|---|
 | `run.sh <daily\|weekly>` | launchd entry point (the scheduled job) — Sonnet 4.6 |
 | `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively — Opus 4.8 |
+| `wf.sh` → `~/.local/bin/wf <daily\|weekly>` | reattachable (tmux) followup for phone access — see MOBILE.md |
 | `metrics.py` | read-only indicators (SMA/ATR/ADX/vol/beta/…); used by the prompts |
 | `notify.sh` | macOS banner + ntfy.sh phone push |
 | `watcher-settings.json` | permission allow/deny for the headless run |
