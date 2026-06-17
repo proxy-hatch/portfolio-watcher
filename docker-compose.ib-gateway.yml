@@ -1,0 +1,29 @@
+name: algo-trader
+
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: always
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      READ_ONLY_API: ${READ_ONLY_API:-yes}
+      TWS_ACCEPT_INCOMING: ${TWS_ACCEPT_INCOMING:-}
+      TWS_SETTINGS_PATH: ${TWS_SETTINGS_PATH:-}
+      VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}
+      TWOFA_TIMEOUT_ACTION: ${TWOFA_TIMEOUT_ACTION:-restart}
+      RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
+      TWOFA_EXIT_INTERVAL: ${TWOFA_EXIT_INTERVAL:-300}
+      EXISTING_SESSION_DETECTED_ACTION: ${EXISTING_SESSION_DETECTED_ACTION:-secondary}
+      AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-11:59 PM}
+      TWS_COLD_RESTART: ${TWS_COLD_RESTART:-}
+      TIME_ZONE: ${TIME_ZONE:-Asia/Taipei}
+      TZ: ${TIME_ZONE:-Asia/Taipei}
+    ports:
+      - "127.0.0.1:4001:4003"
+      - "127.0.0.1:4002:4004"
+      - "127.0.0.1:5900:5900"
+    # Uncomment to persist settings across container restarts:
+#    volumes:
+#      - ./ib-gateway-settings/:/home/ibgateway/Jts

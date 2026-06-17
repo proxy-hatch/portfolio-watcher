@@ -1,0 +1,16 @@
+[project]
+name = "portfolio-watcher"
+version = "0.1.0"
+description = "Local launchd scheduler + read-only IBKR metrics helper for the Portfolio Watcher"
+readme = "README.md"
+requires-python = "==3.14.*"
+dependencies = [
+    "ib-async",
+    "numpy",
+    "pandas",
+]
+
+# Application (not a library) — don't try to build/install this project itself,
+# just manage its dependency venv (matches the claude-investment uv workflow).
+[tool.uv]
+package = false

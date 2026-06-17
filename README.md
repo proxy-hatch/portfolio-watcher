@@ -25,21 +25,27 @@ The unattended run is **recommend-only by prompt instruction** — it never plac
 modifies, or cancels orders. All order placement happens in the interactive
 `watcher-followup` session.
 
+> **First-time install (fresh machine):** see **[SETUP.md](SETUP.md)** — IB Gateway via
+> Docker, ibkr-cli, `uv sync`, Claude CLI, ntfy, and installing the launchd jobs.
+
 ---
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `run.sh <daily\|weekly>` | launchd entry point (the scheduled job) |
-| `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively |
+| `run.sh <daily\|weekly>` | launchd entry point (the scheduled job) — Sonnet 4.6 |
+| `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively — Opus 4.8 |
 | `metrics.py` | read-only indicators (SMA/ATR/ADX/vol/beta/…); used by the prompts |
 | `notify.sh` | macOS banner + ntfy.sh phone push |
 | `watcher-settings.json` | permission allow/deny for the headless run |
+| `pyproject.toml` / `uv.lock` / `.python-version` | uv-managed deps (`ib_async`, `pandas`, `numpy`) |
+| `docker-compose.ib-gateway.yml` / `.env.ib-gateway.example` | IB Gateway container + env template |
+| `launchd/*.plist` | source copies of the launchd jobs |
 | `secrets/ntfy-topic` | the ntfy topic (gitignored) |
 | `state/last-<kind>-session` | session id of the most recent run (for resume) |
 | `logs/` | per-run JSON output, stderr, and `<kind>.log` timestamps |
-| `~/Library/LaunchAgents/com.shawn.portfolio-watcher-{daily,weekly}.plist` | the schedules |
+| `~/Library/LaunchAgents/com.shawn.portfolio-watcher-{daily,weekly}.plist` | the installed schedules |
 
 **The prompts themselves live in the vault and are read live every run** (edit = deploy):
 - `~/vaults/trading-kb/03-strategies/trend-following/Portfolio Watcher Daily Close Prompt.md`

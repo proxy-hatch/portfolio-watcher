@@ -1,5 +1,11 @@
+# secrets & local state
 secrets/
 logs/
 state/
+.env
+.env.ib-gateway
+ib-gateway-settings/
+
+# uv / python
 .venv/
 __pycache__/
