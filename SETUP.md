@@ -104,7 +104,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.shawn.portfolio-watc
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.shawn.portfolio-watcher-weekly.plist
 ```
 
-Daily Tue–Fri 16:30, Weekly Sat 09:00 (Mac-local +0800). If your paths/username differ,
+Daily Tue–Fri 09:00, Weekly Sat 09:00 (Mac-local +0800). If your paths/username differ,
 edit the `.plist` ProgramArguments/StandardOut paths first. Then verify:
 
 ```bash

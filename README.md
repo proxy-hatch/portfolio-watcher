@@ -14,7 +14,7 @@ launchd  ──►  run.sh <daily|weekly>  ──►  claude -p (headless, recom
    │                                          • writes run log to the vault
    │                                          • saves session id for resume
    └─ schedule:                          ──►  notify.sh  → macOS banner + ntfy push
-        daily  Tue–Fri 16:30 (+0800)
+        daily  Tue–Fri 09:00 (+0800)
         weekly Sat     09:00 (+0800)
 
 You, later:   watcher-followup <daily|weekly>  ──►  claude -r <saved session>
@@ -41,9 +41,11 @@ modifies, or cancels orders. All order placement happens in the interactive
 | `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively — Opus 4.8 |
 | `wf.sh` → `~/.local/bin/wf <daily\|weekly>` | reattachable (tmux) followup for phone access — see MOBILE.md |
 | `metrics.py` | read-only indicators (SMA/ATR/ADX/vol/beta/…); used by the prompts |
+| `catalysts.py` | upcoming earnings (yfinance) + macro calendar (FOMC/CPI/NFP); gap-risk/execution context for §1.10 (daily) / §2.6 (weekly) — no IB connection, degrades gracefully |
+| `data/econ_calendar.json` | curated US macro calendar (FOMC/CPI/NFP). **Refresh annually** — `catalysts.py` flags `calendar_stale` once `verified_through` passes |
 | `notify.sh` | macOS banner + ntfy.sh phone push |
 | `watcher-settings.json` | permission allow/deny for the headless run |
-| `pyproject.toml` / `uv.lock` / `.python-version` | uv-managed deps (`ib_async`, `pandas`, `numpy`) |
+| `pyproject.toml` / `uv.lock` / `.python-version` | uv-managed deps (`ib_async`, `pandas`, `numpy`, `yfinance`) |
 | `docker-compose.ib-gateway.yml` / `.env.ib-gateway.example` | IB Gateway container + env template |
 | `launchd/*.plist` | source copies of the launchd jobs |
 | `secrets/ntfy-topic` | the ntfy topic (gitignored) |
@@ -134,7 +136,7 @@ if you need a new indicator.
 ## Gateway / auth notes
 
 - IB Gateway (`algo-trader-ib-gateway-1`, port 4001) **auto-restarts 23:59 Asia/Taipei**;
-  the API handshake fails for ~1–2 min during re-auth. The schedules (16:30 / 09:00) avoid
+  the API handshake fails for ~1–2 min during re-auth. The schedules (both 09:00 +0800) avoid
   that window. `run.sh` does a TCP probe and logs a WARN (non-fatal) if 4001 is unreachable.
 - Confirm gateway readiness: `docker logs algo-trader-ib-gateway-1 | grep "Login has completed"`.
 - If a run **FAILED** (you'll get a push + `rc≠0` in `logs/daily.log`), check

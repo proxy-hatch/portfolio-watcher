@@ -8,6 +8,7 @@ dependencies = [
     "ib-async",
     "numpy",
     "pandas",
+    "yfinance",
 ]
 
 # Application (not a library) — don't try to build/install this project itself,

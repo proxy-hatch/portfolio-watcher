@@ -1,0 +1,23 @@
+{
+  "_comment": "Curated US macro-catalyst calendar for the Portfolio Watcher. Events that drive overnight GAP risk for a Nasdaq-leveraged book (QLD/QQQ/TQQQ) — the watcher is close-based, so this never changes a SIGNAL, only execution timing / gap awareness. Dates are the US RELEASE date (Eastern); times are 08:30 ET for CPI/NFP and ~14:00 ET for FOMC. SOURCES — FOMC: federalreserve.gov/monetarypolicy/fomccalendars.htm (all 8 2026 decision days, authoritative). CPI: bls.gov/schedule (full-year 2026, verified). NFP/Employment Situation: bls.gov/schedule — Jun release (Jul 2) verified; Aug-Dec follow the BLS first-Friday convention (verify a borderline date against bls.gov/schedule, e.g. holiday shifts). REFRESH ANNUALLY: when verified_through passes, catalysts.py flags the calendar stale — re-pull next year's FOMC + BLS dates.",
+  "verified_through": "2026-12-31",
+  "events": [
+    {"date": "2026-06-17", "event": "FOMC decision", "impact": "high"},
+    {"date": "2026-07-02", "event": "Jobs report / NFP (Jun)", "impact": "med"},
+    {"date": "2026-07-14", "event": "CPI (Jun)", "impact": "med"},
+    {"date": "2026-07-29", "event": "FOMC decision", "impact": "high"},
+    {"date": "2026-08-07", "event": "Jobs report / NFP (Jul)", "impact": "med"},
+    {"date": "2026-08-12", "event": "CPI (Jul)", "impact": "med"},
+    {"date": "2026-09-04", "event": "Jobs report / NFP (Aug)", "impact": "med"},
+    {"date": "2026-09-11", "event": "CPI (Aug)", "impact": "med"},
+    {"date": "2026-09-16", "event": "FOMC decision", "impact": "high"},
+    {"date": "2026-10-02", "event": "Jobs report / NFP (Sep)", "impact": "med"},
+    {"date": "2026-10-14", "event": "CPI (Sep)", "impact": "med"},
+    {"date": "2026-10-28", "event": "FOMC decision", "impact": "high"},
+    {"date": "2026-11-06", "event": "Jobs report / NFP (Oct)", "impact": "med"},
+    {"date": "2026-11-10", "event": "CPI (Oct)", "impact": "med"},
+    {"date": "2026-12-04", "event": "Jobs report / NFP (Nov)", "impact": "med"},
+    {"date": "2026-12-09", "event": "FOMC decision", "impact": "high"},
+    {"date": "2026-12-10", "event": "CPI (Nov)", "impact": "med"}
+  ]
+}
