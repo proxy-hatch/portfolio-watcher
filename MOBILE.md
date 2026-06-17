@@ -87,10 +87,16 @@ Uses Blink's URL scheme from the Shortcuts app, then "Add to Home Screen".
    Call it `home`.
 2. In **Shortcuts** app → **+** → add action **Open URLs** (or "Open X-Callback URL") with:
    ```
-   blinkshell://run?key=home&cmd=mosh%20mac%20--%20%2FUsers%2Fshawn%2F.local%2Fbin%2Fwf%20daily
+   blinkshell://run?key=home&cmd=mosh1%20macbook%20--%20%2FUsers%2Fshawn%2F.local%2Fbin%2Fwf%20daily
    ```
-   That `cmd` is URL-encoded `mosh mac -- /Users/shawn/.local/bin/wf daily`.
+   That `cmd` is URL-encoded `mosh1 macbook -- /Users/shawn/.local/bin/wf daily`.
    Name the Shortcut **Watcher Daily**.
+   - Use **`mosh1`** (classic mosh), not `mosh`: Blink's newer `mosh` fails under the URL
+     action (just blinks). `mosh1` keeps mosh's auto-reconnect resilience.
+   - `macbook` must be your saved Blink **Host alias** (whatever you named it).
+   - The absolute `/Users/shawn/.local/bin/wf` matters: a URL action / `mosh -- cmd` runs
+     with no login shell, so `wf` is self-contained (sets its own PATH) — but call it by
+     full path so Blink finds it.
 3. Shortcut → Share → **Add to Home Screen** → pick a name + icon (e.g. 📈 "Watcher Daily").
 4. **Duplicate** the Shortcut, change `wf%20daily` → `wf%20weekly`, name it **Watcher
    Weekly**, add to Home Screen with a different icon (e.g. 🗓️).
@@ -100,7 +106,7 @@ that session over mosh — reattaching the live tmux if it's already running.
 
 > If Blink's URL-scheme key/params differ in your version, the fallback is a Shortcut with
 > Blink's own **Shortcuts action** ("Run command in Blink"), command =
-> `mosh mac -- /Users/shawn/.local/bin/wf daily`, then Add to Home Screen.
+> `mosh1 macbook -- /Users/shawn/.local/bin/wf daily`, then Add to Home Screen.
 
 ---
 
