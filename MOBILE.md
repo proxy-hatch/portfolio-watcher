@@ -69,6 +69,13 @@ method below is the most universally compatible, so it's the default here.)
    drops you into the daily watcher session. `Ctrl-b d` detaches tmux; closing Blink is
    fine — `wf daily` reattaches the same conversation next time.
 
+**Scrolling the conversation:** `wf` runs in a dedicated tmux server (`-L watcher`) tuned
+for touch — **two-finger swipe up** scrolls back through the live chat; **tap once** (or
+press `q`) to jump to the bottom and resume typing. Works because tmux keeps the
+full-screen output in a 100k-line scrollback (`~/.local/bin/wf` → `tmux.conf`). Plain ↑ in
+Claude still recalls your last prompt — press **Esc** to clear it. After any `tmux.conf`
+change, reset with `tmux -L watcher kill-server`, then `wf daily` again.
+
 ---
 
 ## Part C — Two Home-Screen icons (daily / weekly)

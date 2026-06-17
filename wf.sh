@@ -9,4 +9,6 @@ set -u
 DIR=${0:A:h}                       # repo dir (resolves the ~/.local/bin/wf symlink)
 KIND=${1:-daily}
 case "$KIND" in daily|weekly) ;; *) echo "usage: wf <daily|weekly>" >&2; exit 64 ;; esac
-exec /opt/homebrew/bin/tmux -f "$DIR/tmux.conf" new-session -A -s "wf-$KIND" "watcher-followup $KIND"
+# Dedicated tmux server (-L watcher) so our -f config reliably loads — a `-f` config is
+# ignored if it joins an already-running default server. Isolated from any other tmux.
+exec /opt/homebrew/bin/tmux -L watcher -f "$DIR/tmux.conf" new-session -A -s "wf-$KIND" "watcher-followup $KIND"
