@@ -108,6 +108,24 @@ that session over mosh — reattaching the live tmux if it's already running.
 > Blink's own **Shortcuts action** ("Run command in Blink"), command =
 > `mosh1 macbook -- /Users/shawn/.local/bin/wf daily`, then Add to Home Screen.
 
+### Optional: a hands-off icon (`--yolo`)
+
+By default the session still asks before each action (you tap to approve — fine when
+you're watching). To run **with no permission prompts** — handy when you want to fire off
+an order AFK and walk away — append `--yolo`:
+
+```
+blinkshell://run?key=home&cmd=mosh1%20macbook%20--%20%2FUsers%2Fshawn%2F.local%2Fbin%2Fwf%20daily%20--yolo
+```
+
+(`--yolo` → `claude --dangerously-skip-permissions`; `-y` works too, and any other args
+after the kind pass straight through to `claude`.) This **auto-approves every action,
+including ib_async order placement**, with no confirmation — so make it a *separate* icon
+(e.g. ⚡ "Watcher Daily — yolo") and use it deliberately. The skip-perms run gets its own
+tmux session (`wf-daily-yolo`), kept separate from the normal `wf-daily` so the two never
+reattach into each other. From the shell it's just `wf daily --yolo` (or
+`watcher-followup daily --yolo` without tmux).
+
 ---
 
 ## Security notes
