@@ -108,23 +108,23 @@ that session over mosh — reattaching the live tmux if it's already running.
 > Blink's own **Shortcuts action** ("Run command in Blink"), command =
 > `mosh1 macbook -- /Users/shawn/.local/bin/wf daily`, then Add to Home Screen.
 
-### Optional: a hands-off icon (`--yolo`)
+### Permissions: hands-off by default, `--safe` to opt out
 
-By default the session still asks before each action (you tap to approve — fine when
-you're watching). To run **with no permission prompts** — handy when you want to fire off
-an order AFK and walk away — append `--yolo`:
+The icons above run **hands-off**: the resumed session auto-approves every action
+(`--dangerously-skip-permissions`), **including ib_async order placement**, so you can fire
+off an order AFK without tap-approving each step. That's the default for `wf daily` /
+`wf weekly`.
+
+If you'd rather a session that **asks before each action**, append `--safe`:
 
 ```
-blinkshell://run?key=home&cmd=mosh1%20macbook%20--%20%2FUsers%2Fshawn%2F.local%2Fbin%2Fwf%20daily%20--yolo
+blinkshell://run?key=home&cmd=mosh1%20macbook%20--%20%2FUsers%2Fshawn%2F.local%2Fbin%2Fwf%20daily%20--safe
 ```
 
-(`--yolo` → `claude --dangerously-skip-permissions`; `-y` works too, and any other args
-after the kind pass straight through to `claude`.) This **auto-approves every action,
-including ib_async order placement**, with no confirmation — so make it a *separate* icon
-(e.g. ⚡ "Watcher Daily — yolo") and use it deliberately. The skip-perms run gets its own
-tmux session (`wf-daily-yolo`), kept separate from the normal `wf-daily` so the two never
-reattach into each other. From the shell it's just `wf daily --yolo` (or
-`watcher-followup daily --yolo` without tmux).
+(`--safe` / `-s` drops the skip-permissions flag; any other args after the kind pass
+straight through to `claude`.) A `--safe` run gets its own tmux session (`wf-daily-safe`),
+kept separate from the default `wf-daily` so the two never reattach into each other. From
+the shell it's `wf daily --safe` (or `watcher-followup daily --safe` without tmux).
 
 ---
 

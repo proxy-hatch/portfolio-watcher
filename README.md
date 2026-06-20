@@ -73,11 +73,12 @@ watcher-followup weekly
 Then just talk to it, e.g. `place the MSFT sell — 62 sh, TFSA, SMART route`.
 It has the full run context (positions, triggers, recommendations) already loaded.
 
-Add `--yolo` (or `-y`) to skip permission prompts — `watcher-followup daily --yolo`, or
-`wf daily --yolo` from the phone. This passes `--dangerously-skip-permissions` to claude:
-it auto-approves **every** action, including ib_async order placement, with no
-confirmation. Convenient AFK; use deliberately. (Any other args after the kind also pass
-straight through to claude.)
+**By default the followup session skips permission prompts** (passes
+`--dangerously-skip-permissions` to claude): it auto-approves every action, including
+ib_async order placement, so you can act without tap-approving each step — the point of
+resuming, often AFK from the phone. Pass `--safe` (or `-s`) to restore normal interactive
+prompts: `watcher-followup daily --safe`, or `wf daily --safe`. (Any other args after the
+kind pass straight through to claude.)
 
 ### Run a watcher manually right now (ad-hoc, off-schedule)
 ```zsh
