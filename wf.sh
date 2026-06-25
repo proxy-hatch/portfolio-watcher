@@ -23,8 +23,8 @@ case "$KIND" in daily|weekly) ;; *) echo "usage: wf <daily|weekly> [--safe|extra
 (( $# )) && shift                  # drop the kind; forward the rest to watcher-followup
 
 # Build the inner command (single string for tmux), quoting each forwarded arg. --safe selects
-# a distinct session suffix so the safe/default sessions stay separate (a tmux session's
-# permission mode is fixed when it's created; -A would otherwise reattach into the wrong one).
+# a distinct session family so safe/default stay separate (a tmux session's permission mode is
+# fixed when it's created; -A would otherwise reattach into the wrong one).
 suffix=""
 cmd="/Users/shawn/.local/bin/watcher-followup $KIND"
 for a in "$@"; do
@@ -34,8 +34,35 @@ for a in "$@"; do
   cmd+=" ${(q)a}"
 done
 
+TMUX_BIN=/opt/homebrew/bin/tmux
+
+# Key the tmux session name to the CURRENT saved session id (run.sh writes a fresh uuid to
+# state/last-<kind>-session on every scheduled run). Without this, `new-session -A -s wf-daily`
+# silently REATTACHES to a still-running followup from a PREVIOUS day — you'd keep landing in
+# yesterday's conversation even though today's run minted a new session. Keying the name to the
+# SID means a new run → new session name → fresh followup, while same-day reconnects (SID
+# unchanged) still reattach to the same conversation (phone resilience preserved).
+SFILE="$DIR/state/last-$KIND-session"
+SID=""; [[ -r "$SFILE" ]] && SID="$(< "$SFILE")"
+tag=""; [[ -n "$SID" ]] && tag="-${SID[1,8]}"
+session="wf-$KIND$suffix$tag"
+
+# Reap stale same-family sessions (same kind + mode, but a DIFFERENT SID = prior days) so old
+# `claude -r` processes don't accumulate and can't be reattached by mistake. Never touches the
+# target session or the other mode's (safe vs default) sessions.
+if [[ -n "$tag" ]]; then
+  for s in ${(f)"$(${TMUX_BIN} -L watcher ls -F '#{session_name}' 2>/dev/null)"}; do
+    [[ "$s" == "$session" ]] && continue
+    if [[ -n "$suffix" ]]; then
+      [[ "$s" == wf-$KIND-safe* ]] && ${TMUX_BIN} -L watcher kill-session -t "$s" 2>/dev/null
+    else
+      [[ "$s" == wf-$KIND* && "$s" != wf-$KIND-safe* ]] && ${TMUX_BIN} -L watcher kill-session -t "$s" 2>/dev/null
+    fi
+  done
+fi
+
 # Dedicated tmux server (-L watcher) so our -f config reliably loads — a `-f` config is
 # ignored if it joins an already-running default server. Isolated from any other tmux.
 # Absolute inner path (watcher-followup) for the same no-login-shell robustness.
-exec /opt/homebrew/bin/tmux -L watcher -f "$DIR/tmux.conf" \
-  new-session -A -s "wf-$KIND$suffix" "$cmd"
+exec ${TMUX_BIN} -L watcher -f "$DIR/tmux.conf" \
+  new-session -A -s "$session" "$cmd"
