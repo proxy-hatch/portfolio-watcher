@@ -47,6 +47,9 @@ fi
 # --- Mint a session id up front so we own it regardless of how the run exits ---
 SID="$(/usr/bin/uuidgen)"
 echo "$SID" > "$DIR/state/last-$KIND-session"
+# Append to the session history (started_at <TAB> kind <TAB> sid) so past runs can be
+# listed and resumed days later via `wf-sessions` — claude persists each session on disk.
+printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$KIND" "$SID" >> "$DIR/state/sessions.tsv"
 echo "[$(date)] $KIND run start — session $SID" >> "$LOGDIR/$KIND.log"
 
 # --- Keep the scheduled run LEAN: no skills / task-tools / tool-search / scratch

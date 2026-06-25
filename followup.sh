@@ -17,30 +17,37 @@ emulate -L zsh
 set -u
 
 KIND=${1:-daily}
-(( $# )) && shift                  # drop the kind; the rest pass through to claude
+(( $# )) && shift                  # drop the kind; the rest are flags/args
 DIR=${0:A:h}
 SFILE="$DIR/state/last-$KIND-session"
 NUDGE=/Users/shawn/.claude/thinking-nudge.txt
 
-# Skip-permissions is the DEFAULT; --safe/-s opts back into normal prompts. --yolo/-y is
-# accepted as an explicit (now redundant) opt-in so older shortcuts don't break. Everything
-# else is forwarded verbatim to claude.
+# Skip-permissions is the DEFAULT; --safe/-s opts back into normal prompts (--yolo/-y is the
+# now-redundant explicit opt-in). --sid <id> resumes a SPECIFIC past session instead of the
+# latest saved one (used by `wf-sessions resume`). Anything else is forwarded to claude.
 typeset -a CLAUDE_ARGS=()
 skip=1
-for a in "$@"; do
-  case "$a" in
+SID_OVERRIDE=""
+while (( $# )); do
+  case "$1" in
     --safe|-s) skip=0 ;;
     --yolo|-y) skip=1 ;;
-    *)         CLAUDE_ARGS+=("$a") ;;
+    --sid)     shift; SID_OVERRIDE=${1:-} ;;
+    *)         CLAUDE_ARGS+=("$1") ;;
   esac
+  shift
 done
 (( skip )) && CLAUDE_ARGS=(--dangerously-skip-permissions "${CLAUDE_ARGS[@]}")
 
-if [[ ! -f "$SFILE" ]]; then
-  echo "No saved $KIND session yet (expected $SFILE). Has the scheduled run fired?" >&2
-  exit 1
+if [[ -n "$SID_OVERRIDE" ]]; then
+  SID="$SID_OVERRIDE"
+else
+  if [[ ! -f "$SFILE" ]]; then
+    echo "No saved $KIND session yet (expected $SFILE). Has the scheduled run fired?" >&2
+    exit 1
+  fi
+  SID="$(< "$SFILE")"
 fi
-SID="$(< "$SFILE")"
 echo "Resuming $KIND watcher session $SID (Opus 4.8, high thinking) ..." >&2
 export MAX_THINKING_TOKENS=32000   # high
 cd /Users/shawn/vaults/trading-kb

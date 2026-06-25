@@ -48,17 +48,18 @@ tag=""; [[ -n "$SID" ]] && tag="-${SID[1,8]}"
 session="wf-$KIND$suffix$tag"
 
 # Reap stale same-family sessions (same kind + mode, but a DIFFERENT SID = prior days) so old
-# `claude -r` processes don't accumulate and can't be reattached by mistake. Never touches the
-# target session or the other mode's (safe vs default) sessions.
+# `claude -r` processes don't accumulate and can't be reattached by mistake. Only DETACHED
+# ones — never kill a session that's currently in use (e.g. one you reconnected to via
+# `wf-sessions`). Never touches the target session or the other mode's (safe vs default) ones.
 if [[ -n "$tag" ]]; then
-  for s in ${(f)"$(${TMUX_BIN} -L watcher ls -F '#{session_name}' 2>/dev/null)"}; do
-    [[ "$s" == "$session" ]] && continue
+  while IFS=' ' read -r s att; do
+    [[ -n "$s" && "$att" == 0 && "$s" != "$session" ]] || continue
     if [[ -n "$suffix" ]]; then
       [[ "$s" == wf-$KIND-safe* ]] && ${TMUX_BIN} -L watcher kill-session -t "$s" 2>/dev/null
     else
       [[ "$s" == wf-$KIND* && "$s" != wf-$KIND-safe* ]] && ${TMUX_BIN} -L watcher kill-session -t "$s" 2>/dev/null
     fi
-  done
+  done < <(${TMUX_BIN} -L watcher ls -F '#{session_name} #{session_attached}' 2>/dev/null)
 fi
 
 # Dedicated tmux server (-L watcher) so our -f config reliably loads — a `-f` config is

@@ -40,6 +40,7 @@ modifies, or cancels orders. All order placement happens in the interactive
 | `run.sh <daily\|weekly>` | launchd entry point (the scheduled job) — Sonnet 4.6 |
 | `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively — Opus 4.8 |
 | `wf.sh` → `~/.local/bin/wf <daily\|weekly>` | reattachable (tmux) followup for phone access — see MOBILE.md |
+| `sessions.sh` → `~/.local/bin/wf-sessions` | list past runs' sessions / reconnect to one days later |
 | `metrics.py` | read-only indicators (SMA/ATR/ADX/vol/beta/…); used by the prompts |
 | `catalysts.py` | upcoming earnings (yfinance) + macro calendar (FOMC/CPI/NFP); gap-risk/execution context for §1.10 (daily) / §2.6 (weekly) — no IB connection, degrades gracefully |
 | `data/econ_calendar.json` | curated US macro calendar (FOMC/CPI/NFP). **Refresh annually** — `catalysts.py` flags `calendar_stale` once `verified_through` passes |
@@ -49,7 +50,7 @@ modifies, or cancels orders. All order placement happens in the interactive
 | `docker-compose.ib-gateway.yml` / `.env.ib-gateway.example` | IB Gateway container + env template |
 | `launchd/*.plist` | source copies of the launchd jobs |
 | `secrets/ntfy-topic` | the ntfy topic (gitignored) |
-| `state/last-<kind>-session` | session id of the most recent run (for resume) |
+| `state/last-<kind>-session` / `state/sessions.tsv` | latest session id + full run→session history (resume / `wf-sessions`) |
 | `logs/` | per-run JSON output, stderr, and `<kind>.log` timestamps |
 | `~/Library/LaunchAgents/com.shawn.portfolio-watcher-{daily,weekly}.plist` | the installed schedules |
 
@@ -79,6 +80,17 @@ ib_async order placement, so you can act without tap-approving each step — the
 resuming, often AFK from the phone. Pass `--safe` (or `-s`) to restore normal interactive
 prompts: `watcher-followup daily --safe`, or `wf daily --safe`. (Any other args after the
 kind pass straight through to claude.)
+
+### Reconnect to an earlier day's session
+```zsh
+wf-sessions             # list every recorded run (newest first) with its session id + live status
+wf-sessions daily       # filter to daily (or weekly)
+wf-sessions resume 3    # reconnect to row #3  (or: wf-sessions resume <sid-prefix>)
+```
+Every scheduled run is recorded to `state/sessions.tsv`, and claude keeps each session on
+disk — so you can resume a run from days ago (same Opus followup; reattaches its tmux if
+still live). Plain `wf daily` always targets the **latest** run; `wf-sessions` is how you
+reach older ones.
 
 ### Run a watcher manually right now (ad-hoc, off-schedule)
 ```zsh
