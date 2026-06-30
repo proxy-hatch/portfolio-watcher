@@ -1,29 +1,90 @@
-# Portfolio Watcher — Local Scheduler
+# Scheduled local Claude Code, with mobile followup
 
-Runs the daily/weekly Portfolio Watcher **unattended on this Mac** via `launchd` +
-headless `claude -p`, then lets you **resume the same session interactively** to place
-any orders it recommends.
+A pattern for running a **headless Claude Code job on a schedule on your own machine** —
+one that can reach **localhost-only services** and your local files, do real work, alert
+you, and that you can then **resume interactively (including from your phone) to act on
+what it found**.
 
-Why local (not co-work / not cloud): the watcher needs `127.0.0.1:4001` (IB Gateway)
-and the local venv (`ib_async`). Co-work computer-use can't type into a terminal
-("click" tier); cloud routines can't reach localhost. A local launchd job can do both.
+Two phases share **one Claude session**:
+
+1. **Unattended run** (scheduled, no human) — a cheap, locked-down `claude -p` executes a
+   task prompt, calls local compute helpers, writes its findings, and pings you if anything
+   needs attention. It only *recommends* — it never acts.
+2. **Interactive followup** (you, minutes or days later) — you resume that exact session
+   with `claude -r` on a stronger model, full context already loaded, and take the actions
+   it proposed. From your desk, or from your phone over a resilient connection.
+
+> The concrete example wired up in this repo is a **portfolio watcher**: it reviews a
+> brokerage account each market day against a strategy checklist and lets you place the
+> orders it recommends. That's just the demo, though — **nothing in the architecture is
+> trading-specific**. Swap the prompt, the compute helpers, and the local service for your
+> own and the same skeleton runs any "watch something locally on a schedule, then let me
+> act on it from anywhere" job.
+
+## Architecture
 
 ```
-launchd  ──►  run.sh <daily|weekly>  ──►  claude -p (headless, recommend-only)
-   │                                          • ibkr-cli reads + metrics.py
-   │                                          • writes run log to the vault
-   │                                          • saves session id for resume
-   └─ schedule:                          ──►  notify.sh  → macOS banner + ntfy push
-        daily  Tue–Sat 09:00 (+0800)   # Sat reviews Fri's close
-        weekly Sat     09:30 (+0800)   # after the Sat daily
+  UNATTENDED RUN  (scheduled · no human present)
+  ───────────────────────────────────────────────────────────────────────────────
+  launchd ──► run.sh <kind> ──► claude -p   (headless · cheap model · locked down)
+  (calendar      │                 │
+   schedule)     │                 ├─ reads  task prompt   ◄── notes vault (.md, edit = deploy)
+                 │                 ├─ calls  compute helpers
+                 │                 │          • metrics.py   ──► local service @ 127.0.0.1
+                 │                 │          • catalysts.py ──► web API + curated data file
+                 │                 ├─ writes run log         ──► notes vault
+                 │                 ├─ saves session id       ──► state/  (+ sessions.tsv history)
+                 │                 └─ returns result ──┐
+                 └─ notify.sh ◄─────────────────────────┘ ──► macOS banner + ntfy push ──► 📱
+  ───────────────────────────────────────────────────────────────────────────────
 
-You, later:   watcher-followup <daily|weekly>  ──►  claude -r <saved session>
-              (full context loaded; you're present → it CAN place orders)
+  INTERACTIVE FOLLOWUP  (you · minutes or days later · CAN take actions)
+  ───────────────────────────────────────────────────────────────────────────────
+  terminal ───────────────────────► watcher-followup <kind>
+                                          │  = claude -r <session>   (strong model ·
+  iPhone ──► Tailscale ──► mosh ──► tmux ─┘    full context loaded · acts on your behalf)
+             (dynamic IP)  (survives  (reattach          via the `wf` wrapper
+                            drops)     -able)
+       wf-sessions  ──► list past runs / reconnect to an older day's session
+  ───────────────────────────────────────────────────────────────────────────────
 ```
 
-The unattended run is **recommend-only by prompt instruction** — it never places,
-modifies, or cancels orders. All order placement happens in the interactive
-`watcher-followup` session.
+### The pieces
+
+- **Scheduler — `launchd`.** macOS user agents fire `run.sh <kind>` on a calendar schedule
+  (here Tue–Sat 09:00 + Sat 09:30, +0800). On Linux this would be cron or a systemd timer.
+- **Headless runner — `run.sh`.** Boots `claude -p` with the task prompt and guardrails: a
+  cheap model, a "lean" directive, `--disallowed-tools` (so it doesn't spin up heavy
+  interactive machinery), `--permission-mode acceptEdits`, and a wall-clock watchdog so it
+  can't hang. Mints a session id up front and records it.
+- **Task prompt — in a notes vault.** The actual checklist lives as Markdown in an Obsidian
+  vault and is **read live every run** — edit the note and the next run uses it, no
+  redeploy. Written to be *recommend-only*: the unattended run proposes, it never acts.
+- **Compute helpers — `metrics.py`, `catalysts.py`.** Small Python that does the
+  deterministic work the model shouldn't eyeball. One reads a **localhost-only service**;
+  the other pulls an external API plus a curated local data file. Both degrade gracefully so
+  a flaky call can't break the run.
+- **The local service — why this runs locally at all.** The run needs something reachable
+  only on `127.0.0.1` (here a brokerage gateway) plus a local Python venv. A cloud agent
+  can't reach localhost; a GUI-automation agent can't reliably drive a terminal. A local
+  scheduled job does both — that constraint is the whole reason for this design.
+- **Outputs & state.** Each run writes a dated log to the vault and per-run JSON/stderr to
+  `logs/`; the session id goes to `state/last-<kind>-session` and is appended to
+  `state/sessions.tsv` (the history `wf-sessions` reads).
+- **Alerting — `notify.sh`.** Severity-based: a macOS banner every run, plus an
+  [ntfy](https://ntfy.sh) push to your phone on anything actionable or a failure.
+- **Interactive followup — `followup.sh` → `watcher-followup`.** Resumes the run's exact
+  session with `claude -r` on a stronger model — full context already loaded — so you, being
+  present, can take the actions it proposed. Skips permission prompts by default (you resumed
+  *to act*); `--safe` restores them.
+- **Mobile access — `wf` + Tailscale/mosh/tmux.** Tailscale gives a stable address despite a
+  dynamic home IP; mosh survives network drops and sleep; tmux makes the session
+  reattachable; `wf` wraps it so a Home-Screen icon drops you straight into the followup. See
+  **[MOBILE.md](MOBILE.md)**.
+- **Session history — `wf-sessions`.** Lists every recorded run and reconnects to any of them
+  days later (Claude persists each session on disk).
+- **Models.** Cheap/medium for the mechanical run, strong/high for the followup where the
+  decisions are made — see [Models](#models).
 
 > **First-time install (fresh machine):** see **[SETUP.md](SETUP.md)** — IB Gateway via
 > Docker, ibkr-cli, `uv sync`, Claude CLI, ntfy, and installing the launchd jobs.
@@ -41,9 +102,9 @@ modifies, or cancels orders. All order placement happens in the interactive
 | `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively — Opus 4.8 |
 | `wf.sh` → `~/.local/bin/wf <daily\|weekly>` | reattachable (tmux) followup for phone access — see MOBILE.md |
 | `sessions.sh` → `~/.local/bin/wf-sessions` | list past runs' sessions / reconnect to one days later |
-| `metrics.py` | read-only indicators (SMA/ATR/ADX/vol/beta/…); used by the prompts |
-| `catalysts.py` | upcoming earnings (yfinance) + macro calendar (FOMC/CPI/NFP); gap-risk/execution context for §1.10 (daily) / §2.6 (weekly) — no IB connection, degrades gracefully |
-| `data/econ_calendar.json` | curated US macro calendar (FOMC/CPI/NFP). **Refresh annually** — `catalysts.py` flags `calendar_stale` once `verified_through` passes |
+| `metrics.py` | compute helper #1 — deterministic numbers read from the local service, so the model doesn't eyeball them (example: market indicators from IB Gateway) |
+| `catalysts.py` | compute helper #2 — external API + a curated local data file; degrades gracefully, never blocks the run (example: upcoming earnings + a macro-event calendar) |
+| `data/econ_calendar.json` | curated local data file the helper reads (example: macro events). **Refresh annually** — `catalysts.py` flags `calendar_stale` once `verified_through` passes |
 | `notify.sh` | macOS banner + ntfy.sh phone push |
 | `watcher-settings.json` | permission allow/deny for the headless run |
 | `pyproject.toml` / `uv.lock` / `.python-version` | uv-managed deps (`ib_async`, `pandas`, `numpy`, `yfinance`) |
