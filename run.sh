@@ -11,26 +11,28 @@ KIND=${1:-daily}
 DIR=${0:A:h}
 VAULT=/Users/shawn/vaults/trading-kb
 PROMPTS="$VAULT/03-strategies/trend-following"
-# MODEL: Sonnet 4.6, MEDIUM thinking — the watcher is mechanical (metrics.py does the
-# heavy math deterministically; the model just interprets numbers vs thresholds and
-# writes the log), so Sonnet is plenty and far cheaper than Opus. The interactive
-# followup (order decisions) uses Opus 4.8 high — see followup.sh.
-# Call the REAL binary directly, bypassing ~/.local/bin/claude — that wrapper forces
-# MAX_THINKING_TOKENS=63999 / effort=max / adaptive-thinking OFF on every turn, which
-# would make this multi-step job take 30-60+ min.
+# MODELS — call the REAL binary directly, bypassing ~/.local/bin/claude (that wrapper forces
+# MAX_THINKING_TOKENS=63999 / effort=max / adaptive-thinking OFF on every turn, which would
+# make this multi-step job take 30-60+ min). Model + thinking + watchdog are set per-kind:
+#   • daily  = Sonnet 4.6, medium thinking — the daily is MECHANICAL (metrics.py does the
+#     math deterministically; the model just interprets numbers vs thresholds). Cheap, fast.
+#   • weekly = Fable 5, high thinking — the weekly is ANALYTICAL (strategic-core
+#     reconciliation, thesis review, allocation drift, catalyst outlook), so it gets the
+#     stronger model, a deeper thinking budget, and a longer watchdog.
+# The interactive followup (order decisions, either kind) also uses Fable 5 — see followup.sh.
 CLAUDE=/opt/homebrew/bin/claude
-CLAUDE_MODEL=claude-sonnet-4-6
-CLAUDE_TIMEOUT=900   # hard wall-clock cap (s) so a stalled API turn can't hang the job
 export HOME=/Users/shawn
 export PATH=/Users/shawn/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-export MAX_THINKING_TOKENS=10000   # medium; adaptive thinking left ON (do NOT set
-                                   # ALWAYS_ENABLE_EFFORT / DISABLE_ADAPTIVE)
 
 case "$KIND" in
-  daily)  PROMPT="$PROMPTS/Portfolio Watcher Daily Close Prompt.md" ;;
-  weekly) PROMPT="$PROMPTS/Portfolio Watcher Weekly Review Prompt.md" ;;
+  daily)  PROMPT="$PROMPTS/Portfolio Watcher Daily Close Prompt.md"
+          CLAUDE_MODEL=claude-sonnet-4-6; THINK=10000; CLAUDE_TIMEOUT=900  ;;
+  weekly) PROMPT="$PROMPTS/Portfolio Watcher Weekly Review Prompt.md"
+          CLAUDE_MODEL=claude-fable-5;    THINK=32000; CLAUDE_TIMEOUT=1200 ;;
   *) echo "usage: run.sh <daily|weekly>" >&2; exit 64 ;;
 esac
+export MAX_THINKING_TOKENS="$THINK"   # adaptive thinking left ON (do NOT set
+                                      # ALWAYS_ENABLE_EFFORT / DISABLE_ADAPTIVE)
 
 TS="$(date +%Y%m%d-%H%M%S)"
 LOGDIR="$DIR/logs"

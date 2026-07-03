@@ -83,8 +83,8 @@ Two phases share **one Claude session**:
   **[MOBILE.md](MOBILE.md)**.
 - **Session history — `wf-sessions`.** Lists every recorded run and reconnects to any of them
   days later (Claude persists each session on disk).
-- **Models.** Cheap/medium for the mechanical run, strong/high for the followup where the
-  decisions are made — see [Models](#models).
+- **Models.** Cheap/medium for the mechanical daily run; a stronger model + deeper thinking
+  for the analytical weekly run and the interactive followup — see [Models](#models).
 
 > **First-time install (fresh machine):** see **[SETUP.md](SETUP.md)** — IB Gateway via
 > Docker, ibkr-cli, `uv sync`, Claude CLI, ntfy, and installing the launchd jobs.
@@ -229,10 +229,11 @@ if you need a new indicator.
 
 | | Model | Thinking | Why |
 |---|---|---|---|
-| **Watcher run** (`run.sh`) | `claude-sonnet-4-6` | medium (`MAX_THINKING_TOKENS=10000`) | mechanical — metrics.py does the math; the model interprets vs thresholds. Cheap, ~5 min. |
-| **Followup** (`followup.sh`) | `claude-opus-4-8` | high (`MAX_THINKING_TOKENS=32000`) | order decisions deserve maximal reasoning; interactive, so latency is fine. |
+| **Daily run** (`run.sh daily`) | `claude-sonnet-4-6` | medium (`10000`) | mechanical — metrics.py does the math; the model interprets vs thresholds. Cheap, ~5 min. |
+| **Weekly run** (`run.sh weekly`) | `claude-fable-5` | high (`32000`) | analytical — reconciliation, thesis review, allocation drift, catalyst outlook. Once/week, so latency is fine (20-min watchdog). |
+| **Followup** (`followup.sh`, either kind) | `claude-fable-5` | high (`32000`) | order decisions deserve maximal reasoning; interactive. |
 
-Both call the **real binary** `/opt/homebrew/bin/claude` with explicit `--model`, NOT the
+All call the **real binary** `/opt/homebrew/bin/claude` with explicit `--model`, NOT the
 `~/.local/bin/claude` wrapper (which force-sets `MAX_THINKING_TOKENS=63999` / effort=max /
 adaptive-off on every turn — fine interactively, but it made the headless multi-step run
 take 30–60+ min). `followup.sh` still appends the `thinking-nudge.txt` step-by-step prompt.
