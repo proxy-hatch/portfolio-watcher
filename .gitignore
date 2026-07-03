@@ -10,8 +10,10 @@ ib-gateway-settings/
 .venv/
 __pycache__/
 
-# ad-hoc order/action scripts written by followup sessions (named <thing>_YYYYMMDD.py)
+# ad-hoc order/action scripts written by followup sessions (named <thing>_YYYYMMDD.py
+# or <thing>_YYYY-MM-DD.py)
 *_20[0-9][0-9][0-9][0-9][0-9][0-9].py
+*_20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].py
 
 # scratch backtest / research workspaces
 ai-infra-bt/
