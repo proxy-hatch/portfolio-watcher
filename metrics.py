@@ -9,11 +9,17 @@ THIS FILE CONTAINS NO ORDER CODE. It only reads historical bars and computes
 indicators. (The watcher's read-only safety relies in part on this.)
 
 Usage:
-  metrics.py SYM [SYM ...] [--ref QQQ] [--duration "1 Y"]
+  metrics.py SYM [SYM ...] [--ref QQQ] [--duration "1 Y"] [--held]
+
+  --held  ALSO price every currently-held stock (auto-discovered read-only via
+          reqPositions), so NAV / sleeve math never falls back to estimating a
+          legacy holding (e.g. BRK B / CEG / AGQ) from account GPV residuals.
+          Held names get real `position` + `position_value` fields. The symbol
+          list can go stale; positions can't — so prefer --held for the watcher.
 
 Output (stdout): one JSON object:
   {"asof": <utc iso>, "ref": "QQQ", "duration": "1 Y",
-   "symbols": {"QLD": {<metrics>}|{"error": "..."}, ...}}
+   "symbols": {"QLD": {<metrics>, "position": .., "position_value": ..}|{"error": "..."}, ...}}
 """
 import sys
 import json
@@ -26,10 +32,13 @@ import numpy as np
 from ib_async import IB, Stock
 
 # Listing exchange per symbol so SMART qualification is unambiguous.
+# (Only used as a fallback when a symbol is passed explicitly and NOT auto-
+# discovered via --held; held names carry their own qualified contract.)
 PRIMARY = {
     "QLD": "ARCA", "QQQ": "NASDAQ", "SGOV": "ARCA", "TQQQ": "NASDAQ",
     "CAT": "NYSE", "MSFT": "NASDAQ", "NBIS": "NASDAQ", "BE": "NYSE",
     "CORZ": "NASDAQ", "SNDK": "NASDAQ",
+    "BRK B": "NYSE", "CEG": "NASDAQ", "AGQ": "ARCA", "BRK.B": "NYSE",
 }
 
 
@@ -146,10 +155,29 @@ def beta_vs_ref(df_sym, df_ref, lookback=252):
     return rnd(float(np.cov(sr, rr, ddof=1)[0, 1] / var), 3)
 
 
-def fetch(ib, sym, duration):
-    primary = PRIMARY.get(sym)
-    contract = (Stock(sym, "SMART", "USD", primaryExchange=primary)
-                if primary else Stock(sym, "SMART", "USD"))
+def held_stock_positions(ib):
+    """Read-only: aggregate held STK positions across all accounts.
+
+    Returns ({symbol: qualified Contract}, {symbol: net qty}). No order code —
+    reqPositions is a pure read, preserving this module's read-only guarantee.
+    """
+    contracts, qty = {}, {}
+    for p in ib.reqPositions():
+        c = p.contract
+        if c.secType != "STK" or not p.position:
+            continue
+        qty[c.symbol] = qty.get(c.symbol, 0.0) + float(p.position)
+        contracts.setdefault(c.symbol, c)
+    return contracts, {s: q for s, q in qty.items() if q}
+
+
+def fetch(ib, sym, duration, contract=None):
+    if contract is None:
+        primary = PRIMARY.get(sym)
+        contract = (Stock(sym, "SMART", "USD", primaryExchange=primary)
+                    if primary else Stock(sym, "SMART", "USD"))
+    elif not contract.exchange:
+        contract.exchange = "SMART"   # held contract carries conId + primaryExchange
     ib.qualifyContracts(contract)
     bars = ib.reqHistoricalData(
         contract, endDateTime="", durationStr=duration,
@@ -166,6 +194,8 @@ def main():
     ap.add_argument("--duration", default="1 Y")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=4001)
+    ap.add_argument("--held", action="store_true",
+                    help="also price every held stock (read-only reqPositions)")
     args = ap.parse_args()
 
     ib = IB()
@@ -188,17 +218,29 @@ def main():
         "duration": args.duration,
         "symbols": {},
     }
-    wanted = list(dict.fromkeys(args.symbols + [args.ref]))
+    held_contracts, held_qty = ({}, {})
+    if args.held:
+        try:
+            held_contracts, held_qty = held_stock_positions(ib)
+            out["held_symbols"] = sorted(held_qty)
+        except Exception as e:  # noqa: BLE001
+            out["held_error"] = str(e)
+
+    wanted = list(dict.fromkeys(list(held_qty) + args.symbols + [args.ref]))
     dfs = {}
     try:
         for sym in wanted:
             try:
-                df = fetch(ib, sym, args.duration)
+                df = fetch(ib, sym, args.duration, contract=held_contracts.get(sym))
                 if df.empty:
                     out["symbols"][sym] = {"error": "no bars returned"}
                     continue
                 dfs[sym] = df
-                out["symbols"][sym] = metrics_for(df)
+                m = metrics_for(df)
+                if sym in held_qty:
+                    m["position"] = rnd(held_qty[sym], 2)
+                    m["position_value"] = rnd(held_qty[sym] * m["last_close"], 2)
+                out["symbols"][sym] = m
             except Exception as e:  # noqa: BLE001
                 out["symbols"][sym] = {"error": str(e)}
         ref_df = dfs.get(args.ref)
