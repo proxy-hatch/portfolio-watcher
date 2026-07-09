@@ -142,28 +142,35 @@ resuming, often AFK from the phone. Pass `--safe` (or `-s`) to restore normal in
 prompts: `watcher-followup daily --safe`, or `wf daily --safe`. (Any other args after the
 kind pass straight through to claude.)
 
-### Reconnect to an earlier day's session
+### Run a watcher now (catch up after time away / off-schedule)
+Missed scheduled runs (travelling, laptop asleep or off) and don't want to wait for the
+next one? Run it directly — it behaves exactly like the scheduled job (writes the log,
+fires alerts, saves the session so you can follow up):
 ```zsh
-wf-sessions             # list every recorded run (newest first) with its session id + live status
+~/workspace/portfolio-watcher/run.sh daily      # or: run.sh weekly
+```
+First make sure **IB Gateway (Docker) is running** (after a reboot it should auto-start;
+`run.sh` logs a non-fatal WARN if `127.0.0.1:4001` isn't reachable). When it finishes,
+`watcher-followup daily` (or `wf daily` from the phone) to act on it.
+
+> launchd runs a *missed* schedule once automatically shortly after the Mac wakes/boots —
+> but only once, and you may not want to wait. To fire the *installed launchd job* on demand
+> instead (tests the wiring, runs detached):
+> `launchctl kickstart -k gui/501/com.shawn.portfolio-watcher-daily`.
+
+### List / reconnect / clear followup sessions
+```zsh
+wf-sessions             # list every recorded run (newest first) + live-in-tmux status
 wf-sessions daily       # filter to daily (or weekly)
 wf-sessions resume 3    # reconnect to row #3  (or: wf-sessions resume <sid-prefix>)
+wf-sessions clear       # kill ALL lingering watcher tmux sessions at once
+wf-sessions --help      # full usage
 ```
 Every scheduled run is recorded to `state/sessions.tsv`, and claude keeps each session on
-disk — so you can resume a run from days ago (same Opus followup; reattaches its tmux if
-still live). Plain `wf daily` always targets the **latest** run; `wf-sessions` is how you
-reach older ones.
-
-### Run a watcher manually right now (ad-hoc, off-schedule)
-```zsh
-~/workspace/portfolio-watcher/run.sh daily
-```
-Behaves exactly like the scheduled run (writes the log, fires alerts, saves the session
-so you can `watcher-followup daily` afterward).
-
-### Force the *scheduled* job to fire now (test the launchd wiring)
-```zsh
-launchctl kickstart -k gui/501/com.shawn.portfolio-watcher-daily
-```
+disk — so you can `resume` a run from days ago (same Fable 5 followup; reattaches its tmux
+if still live). Plain `wf daily` always targets the **latest** run; `wf-sessions` reaches
+older ones. Use `clear` to wipe all lingering tmux sessions in one shot (instead of resuming
+each and Ctrl-D) — they stay resumable afterward.
 
 ### Stop / disable
 ```zsh

@@ -1,11 +1,14 @@
 #!/bin/zsh
-# wf-sessions [daily|weekly]        — list recorded watcher sessions (newest first)
-# wf-sessions resume <#|sid>        — reconnect to a past session (resumable days later)
+# wf-sessions                     — list recorded watcher sessions (newest first)
+# wf-sessions <daily|weekly>      — filter the list by kind
+# wf-sessions resume <#|sid>      — reconnect to a past session (resumable days later)
+# wf-sessions clear               — kill ALL watcher tmux sessions at once (still resumable)
+# wf-sessions -h | --help         — usage
 #
 # run.sh appends every scheduled run to state/sessions.tsv (started_at<TAB>kind<TAB>sid).
 # Claude persists each session on disk, so an old run stays resumable long after — this
 # surfaces the ids and reattaches/resumes one in the same `-L watcher` tmux setup as `wf`
-# (so phone reconnect-resilience and the Opus/skip-perms followup config all apply).
+# (so phone reconnect-resilience and the Fable 5 / skip-perms followup config all apply).
 emulate -L zsh
 set -u
 export PATH=/Users/shawn/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -15,6 +18,40 @@ TSV="$DIR/state/sessions.tsv"
 TMUX_BIN=/opt/homebrew/bin/tmux
 FOLLOWUP=/Users/shawn/.local/bin/watcher-followup
 
+usage() {
+  cat >&2 <<'USAGE'
+wf-sessions — list, reconnect to, or clear Portfolio Watcher followup sessions
+
+  wf-sessions                  list recorded runs (newest first) + live-in-tmux status
+  wf-sessions daily|weekly     filter the list to one kind
+  wf-sessions resume <#|sid>   reconnect to a run by list # or session-id prefix
+                               (reattaches its tmux if live, else resumes from disk)
+  wf-sessions clear            kill ALL live watcher tmux sessions at once — use this
+                               instead of resuming each and Ctrl-D. Sessions stay
+                               resumable afterward (claude keeps them on disk).
+  wf-sessions -h | --help      show this help
+
+History lives in state/sessions.tsv (one row per scheduled run). Plain `wf <kind>`
+targets the latest run; use this to reach older ones or tidy up lingering sessions.
+USAGE
+}
+
+# ---- subcommands that DON'T need the history file -----------------------------------------
+case "${1:-}" in
+  -h|--help|help)
+    usage; exit 0 ;;
+  clear|clean|kill-all|killall)
+    live=$(${TMUX_BIN} -L watcher ls 2>/dev/null | grep -c .)
+    if (( live > 0 )); then
+      ${TMUX_BIN} -L watcher kill-server 2>/dev/null
+      echo "Cleared $live watcher tmux session(s). Still resumable: wf-sessions resume <#|sid>." >&2
+    else
+      echo "No live watcher tmux sessions to clear." >&2
+    fi
+    exit 0 ;;
+esac
+
+# ---- everything below needs the history file ----------------------------------------------
 [[ -r "$TSV" ]] || { echo "No session history yet ($TSV) — it records from the next scheduled run." >&2; exit 1; }
 
 # Load history in file order (oldest first); display/index is newest-first.
@@ -54,7 +91,7 @@ filter=""
 case "${1:-}" in
   daily|weekly) filter="$1" ;;
   ""|list|ls)   ;;
-  *) echo "usage: wf-sessions [daily|weekly] | resume <#|sid>" >&2; exit 64 ;;
+  *) usage; exit 64 ;;
 esac
 
 printf '  %-3s  %-25s  %-7s  %-9s  %s\n' '#' 'started' 'kind' 'sid' 'status'
@@ -68,4 +105,4 @@ for ((i=1; i<=n; i++)); do
   printf '  %-3s  %-25s  %-7s  %-9s  %s\n' "$i" "$at" "$k" "$s8" "$st"
 done
 echo
-echo "reconnect:  wf-sessions resume <#|sid>     (resumes via the Opus followup, skip-perms default)"
+echo "reconnect: wf-sessions resume <#|sid>   ·   clear all: wf-sessions clear   ·   help: wf-sessions --help"
