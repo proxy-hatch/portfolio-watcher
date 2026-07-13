@@ -100,7 +100,7 @@ Two phases share **one Claude session**:
 |---|---|
 | `run.sh <daily\|weekly>` | launchd entry point (the scheduled job) — Sonnet 4.6 |
 | `followup.sh` → `~/.local/bin/watcher-followup` | resume the last run interactively — Opus 4.8 |
-| `wf.sh` → `~/.local/bin/wf <daily\|weekly>` | reattachable (tmux) followup for phone access — see MOBILE.md |
+| `wf.sh` → `~/.local/bin/wf` | phone entry point: `wf <kind>` resume-to-act · `wf run <kind>` trigger a run · `wf --help` — see MOBILE.md |
 | `sessions.sh` → `~/.local/bin/wf-sessions` | list past runs' sessions / reconnect to one days later |
 | `metrics.py` | compute helper #1 — deterministic numbers read from the local service, so the model doesn't eyeball them (example: market indicators from IB Gateway) |
 | `catalysts.py` | compute helper #2 — external API + a curated local data file; degrades gracefully, never blocks the run (example: upcoming earnings + a macro-event calendar) |
@@ -144,14 +144,18 @@ kind pass straight through to claude.)
 
 ### Run a watcher now (catch up after time away / off-schedule)
 Missed scheduled runs (travelling, laptop asleep or off) and don't want to wait for the
-next one? Run it directly — it behaves exactly like the scheduled job (writes the log,
+next one? Trigger a fresh run — it behaves exactly like the scheduled job (writes the log,
 fires alerts, saves the session so you can follow up):
 ```zsh
-~/workspace/portfolio-watcher/run.sh daily      # or: run.sh weekly
+wf run daily                                    # or: wf run weekly  — runs in tmux (phone-safe)
+~/workspace/portfolio-watcher/run.sh daily      # equivalent, run directly (no tmux)
 ```
-First make sure **IB Gateway (Docker) is running** (after a reboot it should auto-start;
-`run.sh` logs a non-fatal WARN if `127.0.0.1:4001` isn't reachable). When it finishes,
-`watcher-followup daily` (or `wf daily` from the phone) to act on it.
+`wf run <kind>` wraps `run.sh` in the reattachable `-L watcher` tmux, so a dropped phone
+connection can't kill the ~10-min job (and a second `wf run <kind>` reattaches to the
+in-progress run rather than starting a duplicate). First make sure **IB Gateway (Docker) is
+running** (after a reboot it should auto-start; `run.sh` logs a non-fatal WARN if
+`127.0.0.1:4001` isn't reachable). When it finishes, `wf daily` (or `watcher-followup daily`)
+to act on it.
 
 > launchd runs a *missed* schedule once automatically shortly after the Mac wakes/boots —
 > but only once, and you may not want to wait. To fire the *installed launchd job* on demand

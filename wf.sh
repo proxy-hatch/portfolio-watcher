@@ -1,6 +1,7 @@
 #!/bin/zsh
-# wf <daily|weekly> [--safe|extra claude args...] — reattachable remote entry point.
-# Runs watcher-followup inside a named tmux session so a dropped phone connection
+# wf <daily|weekly> [--safe] — reattachable remote entry point (resume a run to act on it).
+# Also: `wf run <daily|weekly>` triggers a fresh run.sh in tmux; `wf --help` for usage.
+# Runs the followup (or a run) inside a named tmux session so a dropped phone connection
 # (cellular↔wifi, lock, dead zone) doesn't kill the live order-placing session —
 # you just reconnect and land back in the same conversation. Pairs with mosh, which
 # auto-reconnects the transport. Used by the Blink Shell Home-Screen shortcuts.
@@ -18,8 +19,40 @@ set -u
 export PATH=/Users/shawn/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export HOME=/Users/shawn
 DIR=${0:A:h}                       # repo dir (resolves the ~/.local/bin/wf symlink)
+TMUX_BIN=/opt/homebrew/bin/tmux
+
+usage() {
+  cat >&2 <<'USAGE'
+wf — Portfolio Watcher: trigger a run, or resume one to act on it (reattachable tmux/mosh)
+
+  wf <daily|weekly> [--safe]   resume the latest run's session to act on it — skips
+                               permission prompts by default; --safe restores them
+  wf run <daily|weekly>        trigger a FRESH run now (run.sh) inside tmux, so it
+                               survives a dropped phone connection; follow up with `wf <kind>`
+  wf -h | --help               show this help
+
+See also: wf-sessions (list / reconnect older sessions / clear tmux).
+USAGE
+}
+
+# Intercept sub-verbs before treating $1 as the kind.
+case "${1:-}" in
+  -h|--help|help) usage; exit 0 ;;
+  run|run-now|trigger)
+    shift
+    KIND=${1:-daily}
+    case "$KIND" in daily|weekly) ;; *) echo "usage: wf run <daily|weekly>" >&2; exit 64 ;; esac
+    # Run the scheduled-style pass (run.sh) inside tmux so a dropped phone connection can't
+    # kill the ~10-min job. new-session -A reattaches to an in-progress run of this kind
+    # instead of starting a second concurrent one. run.sh saves the session + fires alerts;
+    # afterward `wf <kind>` resumes it to act on the recommendations.
+    exec ${TMUX_BIN} -L watcher -f "$DIR/tmux.conf" \
+      new-session -A -s "wf-run-$KIND" "$DIR/run.sh $KIND"
+    ;;
+esac
+
 KIND=${1:-daily}
-case "$KIND" in daily|weekly) ;; *) echo "usage: wf <daily|weekly> [--safe|extra claude args]" >&2; exit 64 ;; esac
+case "$KIND" in daily|weekly) ;; *) echo "usage: wf <daily|weekly> [--safe] | wf run <daily|weekly> | wf --help" >&2; exit 64 ;; esac
 (( $# )) && shift                  # drop the kind; forward the rest to watcher-followup
 
 # Build the inner command (single string for tmux), quoting each forwarded arg. --safe selects
@@ -33,8 +66,6 @@ for a in "$@"; do
   esac
   cmd+=" ${(q)a}"
 done
-
-TMUX_BIN=/opt/homebrew/bin/tmux
 
 # Key the tmux session name to the CURRENT saved session id (run.sh writes a fresh uuid to
 # state/last-<kind>-session on every scheduled run). Without this, `new-session -A -s wf-daily`
