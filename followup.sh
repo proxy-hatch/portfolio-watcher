@@ -10,7 +10,8 @@
 # tap-approve each step. Pass --safe (or -s) to restore normal interactive permission
 # prompts. Any other args after the kind are forwarded verbatim to claude.
 #
-# MODEL: Fable 5, HIGH thinking — order decisions deserve maximal reasoning. Calls the
+# MODEL: `opus` alias, HIGH thinking — auto-selects the latest Opus (Opus 5 today), so it
+# tracks new Opus releases without an edit; order decisions deserve maximal reasoning. Calls the
 # real binary directly with explicit model + thinking + the step-by-step nudge (rather
 # than the ~/.local/bin/claude wrapper, so the config is explicit and controlled).
 emulate -L zsh
@@ -48,11 +49,11 @@ else
   fi
   SID="$(< "$SFILE")"
 fi
-echo "Resuming $KIND watcher session $SID (Fable 5, high thinking) ..." >&2
+echo "Resuming $KIND watcher session $SID (Opus / auto, high thinking) ..." >&2
 export MAX_THINKING_TOKENS=32000   # high
 cd /Users/shawn/vaults/trading-kb
 if [[ -f "$NUDGE" ]]; then
-  exec /opt/homebrew/bin/claude -r "$SID" --model claude-fable-5 --append-system-prompt-file "$NUDGE" "${CLAUDE_ARGS[@]}"
+  exec /opt/homebrew/bin/claude -r "$SID" --model opus --append-system-prompt-file "$NUDGE" "${CLAUDE_ARGS[@]}"
 else
-  exec /opt/homebrew/bin/claude -r "$SID" --model claude-fable-5 "${CLAUDE_ARGS[@]}"
+  exec /opt/homebrew/bin/claude -r "$SID" --model opus "${CLAUDE_ARGS[@]}"
 fi

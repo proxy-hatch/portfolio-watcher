@@ -242,7 +242,7 @@ if you need a new indicator.
 |---|---|---|---|
 | **Daily run** (`run.sh daily`) | `claude-sonnet-4-6` | medium (`10000`) | mechanical — metrics.py does the math; the model interprets vs thresholds. Cheap, ~5 min. |
 | **Weekly run** (`run.sh weekly`) | `claude-fable-5` | high (`32000`) | analytical — reconciliation, thesis review, allocation drift, catalyst outlook. Once/week, so latency is fine (20-min watchdog). |
-| **Followup** (`followup.sh`, either kind) | `claude-fable-5` | high (`32000`) | order decisions deserve maximal reasoning; interactive. |
+| **Followup** (`followup.sh`, either kind) | `opus` (alias → latest Opus, i.e. Opus 5) | high (`32000`) | order decisions deserve maximal reasoning; interactive. The alias auto-selects the newest Opus, so it tracks future releases without an edit. |
 
 All call the **real binary** `/opt/homebrew/bin/claude` with explicit `--model`, NOT the
 `~/.local/bin/claude` wrapper (which force-sets `MAX_THINKING_TOKENS=63999` / effort=max /
