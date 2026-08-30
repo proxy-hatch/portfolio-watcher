@@ -1,0 +1,18 @@
+import core_opt as C
+BASE = dict(vol_target=0.30, win=20, cap=3.0, gate="sma10vol", band=4.0)
+def show(lab, **kw):
+    p = dict(BASE); p.update(kw)
+    print(C.fmt(C.run(**p), lab))
+print("=== §1.2c ONE-AT-A-TIME ABLATION (2006-2026, real QLD, 5bps/rebalance) ===\n")
+print(C.HDR)
+show("BASELINE current spec")
+print("\n-- volatility target (numerator) --")
+for v in (0.20,0.25,0.30,0.35,0.40): show(f"  vol target {v:.2f}", vol_target=v)
+print("\n-- vol estimation window --")
+for w in (10,20,32,60,120): show(f"  window {w}d", win=w)
+print("\n-- leverage cap --")
+for c in (1.0,1.5,2.0,2.5,3.0): show(f"  cap {c:.1f}x", cap=c)
+print("\n-- regime gate --")
+for g in ("none","sma6","sma8","sma10","sma10vol","sma12","sma200"): show(f"  gate {g}", gate=g)
+print("\n-- rebalance band (pp of NAV) --")
+for b in (2.0,4.0,6.0,8.0,12.0): show(f"  band {b:.0f}pp", band=b)

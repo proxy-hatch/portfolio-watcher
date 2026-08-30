@@ -15,5 +15,12 @@ __pycache__/
 *_20[0-9][0-9][0-9][0-9][0-9][0-9].py
 *_20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].py
 
-# scratch backtest / research workspaces
-ai-infra-bt/
+# research workspace: track the CODE, never the cached bars (124MB) or scratch output
+ai-infra-bt/data/
+ai-infra-bt/data_adj/
+ai-infra-bt/out/
+ai-infra-bt/__pycache__/
+ai-infra-bt/*.tmp
+
+# weekly yfinance cache written by metrics.py
+data/yf_weekly_*.json

@@ -243,6 +243,36 @@ def main():
                 out["symbols"][sym] = m
             except Exception as e:  # noqa: BLE001
                 out["symbols"][sym] = {"error": str(e)}
+        # Staleness guard (added 2026-07-08): on Jul 2 IB silently returned
+        # NBIS/SNDK series ending Jun 29 while QQQ/QLD/CAT were current, which
+        # masked a fired B3 exit. Cross-check every symbol's last bar date
+        # against the freshest in the batch; refetch stragglers once; if still
+        # behind, mark them loudly so the watcher can't treat them as current.
+        good_dates = {s: dfs[s]["date"].iloc[-1] for s in dfs}
+        if good_dates:
+            max_date = max(good_dates.values())
+            out["max_last_date"] = max_date.strftime("%Y-%m-%d")
+            stale = [s for s, d in good_dates.items() if d < max_date]
+            for sym in stale:
+                try:
+                    df = fetch(ib, sym, args.duration,
+                               contract=held_contracts.get(sym))
+                    if not df.empty and df["date"].iloc[-1] > good_dates[sym]:
+                        dfs[sym] = df
+                        m = metrics_for(df)
+                        if sym in held_qty:
+                            m["position"] = rnd(held_qty[sym], 2)
+                            m["position_value"] = rnd(
+                                held_qty[sym] * m["last_close"], 2)
+                        out["symbols"][sym] = m
+                except Exception:  # noqa: BLE001
+                    pass  # keep the original (stale) data, flagged below
+            still_stale = sorted(
+                s for s in dfs if dfs[s]["date"].iloc[-1] < max_date)
+            for sym in still_stale:
+                out["symbols"][sym]["stale"] = True
+            out["stale_symbols"] = still_stale
+
         ref_df = dfs.get(args.ref)
         if ref_df is not None:
             for sym, df in dfs.items():

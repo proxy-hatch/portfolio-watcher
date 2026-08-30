@@ -53,7 +53,7 @@ echo "Resuming $KIND watcher session $SID (Opus / auto, high thinking) ..." >&2
 export MAX_THINKING_TOKENS=32000   # high
 cd /Users/shawn/vaults/trading-kb
 if [[ -f "$NUDGE" ]]; then
-  exec /opt/homebrew/bin/claude -r "$SID" --model opus --append-system-prompt-file "$NUDGE" "${CLAUDE_ARGS[@]}"
+  exec /opt/homebrew/bin/claude -r "$SID" --model claude-opus-5 --append-system-prompt-file "$NUDGE" "${CLAUDE_ARGS[@]}"
 else
-  exec /opt/homebrew/bin/claude -r "$SID" --model opus "${CLAUDE_ARGS[@]}"
+  exec /opt/homebrew/bin/claude -r "$SID" --model claude-opus-5 "${CLAUDE_ARGS[@]}"
 fi

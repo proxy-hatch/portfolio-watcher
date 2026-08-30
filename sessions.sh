@@ -55,10 +55,11 @@ esac
 [[ -r "$TSV" ]] || { echo "No session history yet ($TSV) — it records from the next scheduled run." >&2; exit 1; }
 
 # Load history in file order (oldest first); display/index is newest-first.
-typeset -a AT_A KIND_A SID_A
-while IFS=$'\t' read -r a k s; do
+typeset -a AT_A KIND_A SID_A LBL_A STAT_A
+while IFS=$'\t' read -r a k s lbl stat; do
   [[ -n "$s" ]] || continue
   AT_A+=("$a"); KIND_A+=("$k"); SID_A+=("$s")
+  LBL_A+=("${lbl:-$k}"); STAT_A+=("${stat:--}")   # legacy 3-field rows have no label/outcome
 done < "$TSV"
 n=${#SID_A}
 (( n )) || { echo "No sessions recorded yet." >&2; exit 0; }
@@ -94,15 +95,15 @@ case "${1:-}" in
   *) usage; exit 64 ;;
 esac
 
-printf '  %-3s  %-25s  %-7s  %-9s  %s\n' '#' 'started' 'kind' 'sid' 'status'
-printf '  %-3s  %-25s  %-7s  %-9s  %s\n' '---' '-------------------------' '-------' '--------' '------'
+printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' '#' 'started' 'label' 'sid' 'outcome' 'tmux'
+printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' '---' '-------------------------' '----------------------' '--------' '----------------' '------'
 for ((i=1; i<=n; i++)); do
   pos=$(( n - i + 1 ))                            # newest first; # is global (ignores filter)
   k=${KIND_A[pos]}; sid=${SID_A[pos]}; at=${AT_A[pos]}; s8=${sid[1,8]}
   [[ -n "$filter" && "$k" != "$filter" ]] && continue
   st=""
   [[ -n "${LIVE[wf-$k-$s8]:-}" || -n "${LIVE[wf-$k-safe-$s8]:-}" ]] && st="● live in tmux"
-  printf '  %-3s  %-25s  %-7s  %-9s  %s\n' "$i" "$at" "$k" "$s8" "$st"
+  printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' "$i" "$at" "${LBL_A[pos]}" "$s8" "${STAT_A[pos]}" "$st"
 done
 echo
 echo "reconnect: wf-sessions resume <#|sid>   ·   clear all: wf-sessions clear   ·   help: wf-sessions --help"
