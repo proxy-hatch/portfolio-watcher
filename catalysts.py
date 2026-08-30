@@ -38,7 +38,17 @@ DIR = Path(__file__).resolve().parent
 CAL_PATH = DIR / "data" / "econ_calendar.json"
 
 # ETFs / leveraged funds in the watcher's universe — no earnings; skip the yfinance call.
-ETFS = {"QLD", "QQQ", "TQQQ", "SGOV", "AGQ", "SPY", "IWM", "DIA"}
+# AIS/AIPO are here so they short-circuit honestly ("ETF — no earnings") instead of
+# round-tripping to Yahoo and coming back "no upcoming date found", which reads like a
+# clean calendar rather than a question the tool cannot answer.
+ETFS = {"QLD", "QQQ", "TQQQ", "SGOV", "AGQ", "SPY", "IWM", "DIA", "AIS", "AIPO"}
+
+# IBKR and Yahoo disagree on class-share tickers: IBKR reports "BRK B", Yahoo wants
+# "BRK-B". Passing the IBKR form through returned "no upcoming date found" — the same
+# string a genuinely quiet calendar returns — so the one v3 holding that DOES report
+# earnings was silently invisible. Verified 2026-08-30: "BRK B" -> nothing,
+# "BRK-B" -> 2026-11-08.
+YAHOO_SYMBOL = {"BRK B": "BRK-B", "BRK.B": "BRK-B", "BF B": "BF-B"}
 
 
 def today_eastern():
@@ -88,6 +98,7 @@ def next_earnings(sym, today, window):
     """Next future earnings date for a single stock via yfinance. Never raises."""
     if sym.upper() in ETFS:
         return {"date": None, "note": "ETF — no earnings"}
+    sym = YAHOO_SYMBOL.get(sym.upper(), sym)
     try:
         import yfinance as yf
     except Exception:  # noqa: BLE001 — ImportError or partial install
