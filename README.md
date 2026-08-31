@@ -244,9 +244,8 @@ if you need a new indicator.
 | **Weekly run** (`run.sh weekly`) | `claude-opus-5` | medium (`10000`) | analytical — reconciliation, thesis review, allocation drift, catalysts; ~30-min watchdog (`1800`s, reads a full week of logs). |
 | **Followup** (`followup.sh`, either kind) | `claude-opus-5` | high (`32000`) | order decisions deserve maximal reasoning; interactive. |
 
-> All three moved to `claude-opus-5` on 2026-08-26: `claude-fable-5` had started failing
-> auth then rate-limit (401 → 429) every Saturday from Jul 24, so the weekly run wasn't
-> firing. Opus 5 was verified available and pinned by exact id across both runs + the followup.
+> Models were moved from Sonnet (daily) / Fable 5 (weekly + followup) to `claude-opus-5`,
+> pinned by exact id, on 2026-08-26.
 
 All call the **real binary** `/opt/homebrew/bin/claude` with explicit `--model`, NOT the
 `~/.local/bin/claude` wrapper (which force-sets `MAX_THINKING_TOKENS=63999` / effort=max /
