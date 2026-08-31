@@ -240,9 +240,13 @@ if you need a new indicator.
 
 | | Model | Thinking | Why |
 |---|---|---|---|
-| **Daily run** (`run.sh daily`) | `claude-sonnet-4-6` | medium (`10000`) | mechanical — metrics.py does the math; the model interprets vs thresholds. Cheap, ~5 min. |
-| **Weekly run** (`run.sh weekly`) | `claude-fable-5` | high (`32000`) | analytical — reconciliation, thesis review, allocation drift, catalyst outlook. Once/week, so latency is fine (20-min watchdog). |
-| **Followup** (`followup.sh`, either kind) | `opus` (alias → latest Opus, i.e. Opus 5) | high (`32000`) | order decisions deserve maximal reasoning; interactive. The alias auto-selects the newest Opus, so it tracks future releases without an edit. |
+| **Daily run** (`run.sh daily`) | `claude-opus-5` | medium (`10000`) | ~25-min watchdog (`1500`s). |
+| **Weekly run** (`run.sh weekly`) | `claude-opus-5` | medium (`10000`) | analytical — reconciliation, thesis review, allocation drift, catalysts; ~30-min watchdog (`1800`s, reads a full week of logs). |
+| **Followup** (`followup.sh`, either kind) | `claude-opus-5` | high (`32000`) | order decisions deserve maximal reasoning; interactive. |
+
+> All three moved to `claude-opus-5` on 2026-08-26: `claude-fable-5` had started failing
+> auth then rate-limit (401 → 429) every Saturday from Jul 24, so the weekly run wasn't
+> firing. Opus 5 was verified available and pinned by exact id across both runs + the followup.
 
 All call the **real binary** `/opt/homebrew/bin/claude` with explicit `--model`, NOT the
 `~/.local/bin/claude` wrapper (which force-sets `MAX_THINKING_TOKENS=63999` / effort=max /
