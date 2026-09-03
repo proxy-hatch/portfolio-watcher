@@ -162,7 +162,7 @@ def main():
         for p in ib.positions():
             pos[p.contract.symbol] += p.position
             per_acct[p.account][p.contract.symbol] += p.position
-        cash = {}
+        cash, avail = {}, {}
         if nav is None or True:
             tot = 0.0
             for acct in ib.managedAccounts():
@@ -173,6 +173,12 @@ def main():
                     if v.currency != "USD": continue
                     if v.tag == "NetLiquidation": tot += float(v.value)
                     elif v.tag == "TotalCashValue": cash[acct] = float(v.value)
+                    # AvailableFunds is what IBKR actually checks an order against.
+                    # In the Margin account it is $51,095 while TotalCashValue reads
+                    # $210 — funding off cash there sold SGOV to buy things the
+                    # account could already afford. In a registered account the two
+                    # are equal, so this is strictly more accurate everywhere.
+                    elif v.tag == "AvailableFunds": avail[acct] = float(v.value)
             if nav is None: nav = tot
         if not nav or nav <= 0:
             print("could not determine NAV", file=sys.stderr); sys.exit(2)
@@ -210,6 +216,9 @@ def main():
                "legacy_value": round(legacy_val, 2),
                "legacy": legacy,
                "cash_by_account": {k: round(v, 2) for k, v in cash.items()},
+               # what an order can actually be placed against, per account
+               "available_by_account": {k: round(avail.get(k, cash.get(k, 0.0)), 2)
+                                        for k in set(cash) | set(avail)},
                "positions_by_account": {a: dict(d) for a, d in per_acct.items()},
                # last close for EVERY held/traded symbol, legacy included — lets the
                # executor flag resting limits that sit far from market (it previously

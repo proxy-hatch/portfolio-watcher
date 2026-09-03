@@ -242,60 +242,101 @@ def build_plan(t, resting):
 
 def add_funding(plan, t, resting):
     """
-    Prepend SGOV sells so each account can pay for ITS OWN buys.
+    Make every BUY payable from what its OWN account can actually spend right now,
+    and queue SGOV sells to top the account up for later runs.
 
-    MUST run AFTER clamping: sizing funding off the unclamped plan over-sells
-    (a $30k QLD order that clamps to $9.5k needs no funding at all).
+    The hard constraint learned on 2026-09-01: a funding SELL placed in the same run
+    CANNOT pay for that run's BUY. Runs fire at 09:00 Taipei = ~21:00 ET, five hours
+    after the close, so the sell is a GTC limit that cannot fill for another ~12
+    hours — while IBKR checks buying power the instant the buy is submitted:
 
-    Funding legs are GTC limits placed ~5h after the US close, so they rest until
-    the next open and can take more than one session to fill. An earlier run's
-    unfilled SGOV sell is therefore BOTH cash-in-transit (its proceeds are already
-    committed to buys) and shares that are no longer sellable. Ignoring that meant a
-    second run recomputed the same shortfall and queued ANOTHER sell: 08-28 placed
-    SELL 65 SGOV, and had it not filled, 08-29 would have queued SELL 68 on top of
-    it — the qty differs, so the exact-match duplicate guard in place() would not
-    have caught it, and 133 shares would have been sold to fund 65 shares' worth.
+        Error 201: Order rejected - reason:Available converted to base: 5964.23 USD
+                   Cash needed for this order and other pending orders: 9199.59 USD
 
-    Returns (plan_with_funding, shortfall_errors, notes).
+    Sorting SELLs ahead of BUYs and sleeping 2.5s between them never addressed this;
+    it only controls submission order, not settlement. So the buy is CLAMPED to what
+    the account can pay today and the shortfall is funded for next time — the same
+    "clamp, never block" rule already used for size caps. The remainder converges over
+    runs instead of stalling (09-02 and 09-03 both re-planned the identical rejected
+    order and had to be vetoed by the reviewer).
+
+    Two different cash numbers, deliberately:
+      spendable — AvailableFunds, what IBKR checks an order against NOW. Caps buys.
+      committed — spendable + proceeds of SGOV sells already resting. Decides whether
+                  to sell MORE, so a pending sell is never duplicated.
+
+    Returns (plan_with_funding, blocking_errors, notes).
     """
-    cash = t.get("cash_by_account", {})
+    avail = t.get("available_by_account") or t.get("cash_by_account", {}) or {}
     posacct = t.get("positions_by_account", {})
     sgov_px = t.get("sgov_price")
-    if not sgov_px: return plan, [], []
+    if not sgov_px:
+        return plan, [], []
 
     transit_sh = {}
     for od in (resting.get("SGOV") or {}).get("orders", []):
         if od["action"] == "SELL" and od.get("account"):
             transit_sh[od["account"]] = transit_sh.get(od["account"], 0.0) + od["qty"]
 
-    need, errs, fund, notes = {}, [], [], []
+    need, notes, errs = {}, [], []
     for o in plan:
         if o["action"] == "BUY" and o["account"]:
             need[o["account"]] = need.get(o["account"], 0.0) + o["notional"]
+
+    fund, drop = [], []
     for acct, req in sorted(need.items()):
-        have = cash.get(acct, 0.0)
+        spendable = avail.get(acct, 0.0)
         pend_sh = transit_sh.get(acct, 0.0)
         transit = pend_sh*sgov_px
         if pend_sh:
-            notes.append(f"{acct}: {pend_sh:.0f} SGOV (${transit:,.0f}) already resting "
-                         f"from an earlier run — counted as cash in transit, not re-sold")
-        short = req*CASH_BUFFER - have - transit
+            notes.append(f"{acct}: {pend_sh:.0f} SGOV (${transit:,.0f}) already resting from "
+                         f"an earlier run — counted toward funding, not re-sold")
+
+        # 1. clamp this account's BUYs to what it can pay for TODAY
+        budget = spendable/CASH_BUFFER
+        if req > budget:
+            legs = [o for o in plan if o["action"] == "BUY" and o["account"] == acct]
+            legs.sort(key=lambda o: o["notional"], reverse=True)
+            room = budget
+            for o in legs:
+                if o["notional"] <= room:
+                    room -= o["notional"]; continue
+                newq = int(room // o["price"]) if o["price"] else 0
+                if newq*o["price"] < MIN_ORDER_USD:
+                    drop.append(o)
+                    notes.append(f"{o['symbol']} {acct}: deferred entirely — "
+                                 f"${spendable:,.0f} spendable cannot cover a "
+                                 f"${MIN_ORDER_USD:,.0f} minimum order")
+                else:
+                    notes.append(f"{o['symbol']} {acct}: {o['qty']} -> {newq} sh — capped at "
+                                 f"${spendable:,.0f} spendable (a funding sell placed now "
+                                 f"cannot fill until the next open); remainder next run")
+                    o["qty"] = newq
+                    o["notional"] = newq*o["price"]
+                    o["reason"] += " [cash-capped]"
+                    room -= o["notional"]
+
+        # 2. queue SGOV so the REMAINDER is affordable on a later run
+        short = req*CASH_BUFFER - spendable - transit
         if short <= 0:
             continue
         held = posacct.get(acct, {}).get("SGOV", 0.0) - pend_sh
         sell = math.ceil(short/sgov_px)
         if sell > held:
-            errs.append(f"{acct}: buys need ${req:,.0f}, cash ${have:,.0f}"
-                        + (f" + ${transit:,.0f} in transit" if transit else "")
-                        + f", only {held:.0f} SGOV (${held*sgov_px:,.0f}) free to fund "
-                          f"— short ${short - held*sgov_px:,.0f}")
-        elif sell > 0:
+            sell = int(held)
+            if sell > 0:
+                notes.append(f"{acct}: only {held:.0f} SGOV free — funding what it can; "
+                             f"the target closes over several runs")
+            else:
+                notes.append(f"{acct}: no SGOV left to fund with; the remainder waits for "
+                             f"cash from elsewhere")
+        if sell > 0:
             fund.append(dict(symbol="SGOV", action="SELL", qty=int(sell), price=sgov_px,
-                             notional=sell*sgov_px, account=acct, funding=True,
-                             pending=0,
-                             reason=f"fund {acct}: cash ${have:,.0f}"
-                                    + (f" + ${transit:,.0f} transit" if transit else "")
-                                    + f" vs ${req:,.0f} needed"))
+                             notional=sell*sgov_px, account=acct, funding=True, pending=0,
+                             reason=f"top up {acct} for the NEXT run: ${spendable:,.0f} "
+                                    f"spendable vs ${req:,.0f} wanted"))
+
+    plan = [o for o in plan if o not in drop]
     return fund + plan, errs, notes
 
 def check_rails(plan, nav, t):
@@ -358,7 +399,11 @@ def place(plan, host, port, cid=None):
     from ib_async import IB, Stock, LimitOrder
     # Always the same client id so v3 can cancel/modify what it placed.
     ib = IB(); ib.connect(host, port, clientId=ORDER_CLIENT_ID, timeout=30)
-    # SELLs (incl. funding) go first so proceeds are available to the BUYs.
+    # SELLs first — but ONLY so a same-symbol reduce-then-add can never cross, NOT
+    # because it funds anything. Runs fire ~5h after the close, so a funding SELL is a
+    # GTC limit that cannot fill for ~12 hours while IBKR checks buying power on
+    # submission. add_funding() is what keeps every BUY inside its account's spendable
+    # cash; ordering here does not and never did.
     plan = sorted(plan, key=lambda o: 0 if o["action"] == "SELL" else 1)
     placed = []
     try:
@@ -527,11 +572,23 @@ def _main(a):
         placed = place(plan, a.host, a.port, a.client_id)
         log_audit(dict(mode="LIVE", replayed_from=a.plan, placed=placed))
         ok = [p for p in placed if p["status"] == "PLACED"]
-        clear_fail()
+        # A broker rejection is a MALFUNCTION and must not clear the counter. This is
+        # the path run.sh --live actually takes; the identical check further down only
+        # ever ran in the non-replay path, so 2026-09-01's Error 201 on QLD was audited
+        # and then immediately cleared instead of counted.
+        rej = [p for p in placed if p["status"] in ("REJECTED", "FAILED")]
+        if rej:
+            detail = "; ".join(f"{r['action']} {r['qty']} {r['symbol']} {r.get('note','')}"
+                               for r in rej)[:200]
+            bump_fail("rejected: " + detail, key="rejected", session=sess)
+            for r in rej: emit(f"  REJECTED: {r['symbol']} {r.get('note','') or '(no reason returned)'}")
+        else:
+            clear_fail()
         print("\n  " + "\n  ".join(f"{p['status']}: {p['symbol']} {p.get('note','')}" for p in placed))
-        notify(f"v3 executed {len(ok)} order(s)",
+        notify(("⚠ v3 executed %d, REJECTED %d" % (len(ok), len(rej))) if rej
+               else f"v3 executed {len(ok)} order(s)",
                "; ".join(f"{p['action']} {p['qty']} {p['symbol']} @ {p.get('limit')}" for p in ok)[:300] or "none",
-               "high")
+               "urgent" if rej else "high")
         return
 
     plan, nav = build_plan(t, resting)
@@ -604,9 +661,10 @@ def _main(a):
     # sys.exit(2) before the funding legs were shown, so the reviewer saw a plan with
     # the funding half missing and no indication anything had gone wrong.
     if fund_notes or fund_errs or any(o.get("funding") for o in plan):
-        print("\n  funding (SELLs are queued ahead of the buys):")
+        print("\n  funding (buys are capped at TODAY's spendable cash; these SELLs "
+              "top the account up for the NEXT run):")
         for n_ in fund_notes:
-            print(f"     in transit: {n_}")
+            print(f"     - {n_}")
         for o in plan:
             if o.get("funding"):
                 print(f"     SELL {o['qty']:>5} SGOV = ${o['notional']:>9,.0f}  [{o['account']}]  {o['reason']}")
