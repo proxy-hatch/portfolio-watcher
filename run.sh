@@ -126,6 +126,17 @@ unsafe today. When genuinely uncertain, HALT — a missed run costs far less tha
 Then do the normal task: write the run-log file the prompt specifies.
 Do not place, modify or cancel orders yourself — execution is handled by the script.
 
+HARD LIMITS ON HOW YOU WORK (these keep this run from hanging):
+- NEVER run a filesystem-wide search. No 'find ~', no 'find /', no mdfind, no locate.
+  Every path you need is given here or in the prompt below. If something is missing,
+  say so in the run log and move on — do not go hunting for it.
+- NEVER background a command, and never run one taking more than about 60 seconds.
+  A command that exceeds the Bash timeout is AUTO-BACKGROUNDED, and this run CANNOT EXIT
+  while a background task is alive: the watchdog then kills it and your verdict is
+  discarded. On 2026-09-05 and 2026-09-10 a stray 'find ~' cost the entire run this way.
+- The automation repo is /Users/shawn/workspace/portfolio-watcher.
+  'claude-investment-clean' does NOT exist — never look for it.
+
 === ENGINE TARGETS ===
 $(cat "$TARGETS")
 
@@ -167,6 +178,23 @@ RESULT="$(/usr/bin/jq -r '.result // .text // empty' "$OUT" 2>/dev/null)"
 APIERR="$(/usr/bin/jq -r '.api_error_status // empty' "$OUT" 2>/dev/null)"
 ISERR="$(/usr/bin/jq -r '.is_error // false' "$OUT" 2>/dev/null)"
 
+# A review can EMIT ITS VERDICT, write the run log, and then be unable to EXIT because a
+# Bash command it ran was auto-backgrounded (a stray `find ~` did this on 2026-09-05 and
+# 2026-09-10). The watchdog kills it, $OUT is empty, and a real decision is thrown away.
+# The transcript is flushed as the session runs, so recover the verdict from it: same
+# model, same session, same reviewed plan — and every deterministic rail below still
+# applies. Fail-closed: salvage_verdict.py prints nothing unless the model's LAST message
+# is a text message carrying a well-formed verdict (a mid-work kill yields nothing).
+SALVAGED=0
+if [[ -f "$TIMEOUT_FLAG" && -z "$RESULT" ]]; then
+  TRANSCRIPT="$HOME/.claude/projects/${VAULT//\//-}/$SID.jsonl"
+  SALV="$(/usr/bin/python3 "$DIR/salvage_verdict.py" "$TRANSCRIPT" 2>/dev/null)"
+  if [[ -n "$SALV" ]]; then
+    RESULT="$SALV"; SALVAGED=1
+    echo "[$(date)] SALVAGED verdict from transcript after ${ELAPSED}s watchdog kill" >> "$ERR"
+  fi
+fi
+
 # Distinguish "the model is UNREACHABLE" from "the model ran and withheld approval".
 #   unreachable  -> infrastructure. The plan already passed every deterministic rail,
 #                   so trade it, but at a TIGHTER cap and shout about it.
@@ -180,7 +208,11 @@ ISERR="$(/usr/bin/jq -r '.is_error // false' "$OUT" 2>/dev/null)"
 # error — otherwise a review that merely *discusses* a past rate limit would classify
 # itself as an outage. Structured fields first, prose last.
 FAILKIND=""; FAILFIX=""
-if [[ -f "$TIMEOUT_FLAG" ]]; then
+if (( SALVAGED )); then
+  # A complete verdict was recovered above. The non-zero rc is our OWN watchdog kill,
+  # not a model failure, so none of the classifiers below apply — do not fail the run.
+  :
+elif [[ -f "$TIMEOUT_FLAG" ]]; then
   FAILKIND="timeout"
   FAILFIX="review exceeded ${CLAUDE_TIMEOUT}s (killed by our own watchdog, not IBKR). See logs/$KIND-$TS.err; retry: wf run $KIND"
 elif [[ "$APIERR" == 401* ]]; then
@@ -206,7 +238,13 @@ if [[ -n "$FAILKIND" ]]; then
   say "=== done: FAILED-$FAILKIND (nothing placed) ==="
   exit 75
 fi
-say "    model review completed in ${ELAPSED}s"
+if (( SALVAGED )); then
+  say "    model review SALVAGED — it FINISHED, then hung ${ELAPSED}s until the watchdog (auto-backgrounded command); using the recorded verdict"
+  "$DIR/notify.sh" "⚠ Watcher $KIND — verdict salvaged" \
+    "Review finished but the process could not exit (auto-backgrounded command); watchdog killed it at ${ELAPSED}s. Using the recorded verdict; all rails still applied." high
+else
+  say "    model review completed in ${ELAPSED}s"
+fi
 
 VERDICT="$(print -r -- "$RESULT" | grep -oE 'VERDICT:[[:space:]]*(APPROVE|HALT.*)' | tail -1)"
 say "    verdict: ${VERDICT:-<none emitted>}"
