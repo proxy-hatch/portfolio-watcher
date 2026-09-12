@@ -8,7 +8,7 @@
 #
 # By DEFAULT the resumed session skips permission prompts (--dangerously-skip-permissions:
 # auto-approves every action, INCLUDING order placement — the point of resuming AFK). Pass
-# --safe (or -s) to restore normal prompts. Other args after the kind pass through to claude
+# --safe (or -s) to restore normal prompts. Other args after the kind pass through to the selected provider
 # (via watcher-followup). A --safe run gets its OWN tmux session (`wf-<kind>-safe`) so it
 # never silently reattaches to — or gets reattached by — the default session of the kind.
 emulate -L zsh
@@ -19,7 +19,7 @@ set -u
 export PATH=/Users/shawn/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export HOME=/Users/shawn
 DIR=${0:A:h}                       # repo dir (resolves the ~/.local/bin/wf symlink)
-TMUX_BIN=/opt/homebrew/bin/tmux
+TMUX_BIN=${WATCHER_TMUX_BIN:-/opt/homebrew/bin/tmux}
 
 usage() {
   cat >&2 <<'USAGE'
@@ -46,8 +46,15 @@ case "${1:-}" in
     # kill the ~10-min job. new-session -A reattaches to an in-progress run of this kind
     # instead of starting a second concurrent one. run.sh saves the session + fires alerts;
     # afterward `wf <kind>` resumes it to act on the recommendations.
+    (( $# )) && shift
+    run_suffix=""
+    run_cmd="$DIR/run.sh $KIND"
+    for a in "$@"; do
+      case "$a" in --shadow) run_suffix="-shadow" ;; *) echo "unexpected run argument: $a" >&2; exit 64 ;; esac
+      run_cmd+=" ${(q)a}"
+    done
     exec ${TMUX_BIN} -L watcher -f "$DIR/tmux.conf" \
-      new-session -A -s "wf-run-$KIND" "$DIR/run.sh $KIND"
+      new-session -A -s "wf-run-$KIND$run_suffix" "$run_cmd"
     ;;
 esac
 
@@ -59,13 +66,18 @@ case "$KIND" in daily|weekly) ;; *) echo "usage: wf <daily|weekly> [--safe] | wf
 # a distinct session family so safe/default stay separate (a tmux session's permission mode is
 # fixed when it's created; -A would otherwise reattach into the wrong one).
 suffix=""
-cmd="/Users/shawn/.local/bin/watcher-followup $KIND"
+cmd="${(q)DIR}/followup.sh $KIND"
+SID_OVERRIDE=""
+expect_sid=0
 for a in "$@"; do
+  if (( expect_sid )); then SID_OVERRIDE="$a"; expect_sid=0; fi
   case "$a" in
+    --sid) expect_sid=1 ;;
     --safe|-s) suffix="-safe" ;;
   esac
   cmd+=" ${(q)a}"
 done
+(( expect_sid )) && { echo "--sid needs a run ID" >&2; exit 64; }
 
 # Key the tmux session name to the CURRENT saved session id (run.sh writes a fresh uuid to
 # state/last-<kind>-session on every scheduled run). Without this, `new-session -A -s wf-daily`
@@ -74,7 +86,11 @@ done
 # SID means a new run → new session name → fresh followup, while same-day reconnects (SID
 # unchanged) still reattach to the same conversation (phone resilience preserved).
 SFILE="$DIR/state/last-$KIND-session"
-SID=""; [[ -r "$SFILE" ]] && SID="$(< "$SFILE")"
+SID="$SID_OVERRIDE"
+if [[ -z "$SID" && -r "$SFILE" ]]; then SID="$(< "$SFILE")"; fi
+[[ -n "$SID" ]] || { echo "No saved $KIND run yet." >&2; exit 1; }
+# Pin the selected ID, including latest, so a scheduler update cannot change the inner target.
+[[ -n "$SID_OVERRIDE" ]] || cmd+=" --sid ${(q)SID}"
 tag=""; [[ -n "$SID" ]] && tag="-${SID[1,8]}"
 session="wf-$KIND$suffix$tag"
 

@@ -1,0 +1,12 @@
+{
+  "codex_bin": "/Applications/Codex.app/Contents/Resources/codex",
+  "model": "gpt-6-astra",
+  "review_effort": "medium",
+  "report_effort": "high",
+  "followup_effort": "high",
+  "review_timeout": 300,
+  "evidence_timeout": 180,
+  "report_timeout": 600,
+  "vault": "/Users/shawn/vaults/trading-kb",
+  "playbook": "03-strategies/trend-following/Portfolio Playbook v3 (2026-08-25).md"
+}

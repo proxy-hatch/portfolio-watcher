@@ -15,12 +15,32 @@ Exit: 0 ok/nothing to do · 2 blocked by a guard · 3 IBKR failure · 4 kill swi
 import argparse, json, os, subprocess, sys, datetime as dt, math
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+SHADOW = False
 STATE = os.path.join(HERE, "state")
 KILL = os.path.join(STATE, "AUTOEXEC_OFF")
 FAILS = os.path.join(STATE, "autoexec-consecutive-failures")
 AUDIT = os.path.join(STATE, "orders-audit.jsonl")
 LOCK  = os.path.join(STATE, "v3_execute.lock")
 NAVH  = os.path.join(STATE, "nav-history.jsonl")
+
+def configure_shadow():
+    """Dry-run accounting is private; read the real baseline without updating it."""
+    global STATE, KILL, FAILS, AUDIT, LOCK, NAVH, SHADOW
+    SHADOW = True
+    live_state = os.path.join(HERE, "state")
+    STATE = os.path.join(live_state, "shadow-executor")
+    os.makedirs(STATE, exist_ok=True)
+    KILL = os.path.join(STATE, "AUTOEXEC_OFF")
+    FAILS = os.path.join(STATE, "autoexec-consecutive-failures")
+    AUDIT = os.path.join(STATE, "orders-audit.jsonl")
+    LOCK = os.path.join(STATE, "v3_execute.lock")
+    NAVH = os.path.join(STATE, "nav-history.jsonl")
+    for name in ("nav-history.jsonl", "AUTOEXEC_OFF"):
+        src, dst = os.path.join(live_state, name), os.path.join(STATE, name)
+        if os.path.exists(src):
+            with open(src) as f: text = f.read()
+            with open(dst, "w") as f: f.write(text)
+        elif os.path.exists(dst): os.remove(dst)
 
 # ---- rails ---------------------------------------------------------------
 WHITELIST   = {"QLD", "AIS", "AIPO", "BRK B", "SGOV"}
@@ -97,6 +117,7 @@ def emit(msg):
     print(msg, file=sys.stderr)
 
 def notify(title, body, prio="default"):
+    if SHADOW: return
     try: subprocess.run([os.path.join(HERE, "notify.sh"), title, body, prio],
                         check=False, capture_output=True, timeout=20)
     except Exception: pass
@@ -198,6 +219,7 @@ def get_resting(host, port, cid):
 
 def get_targets(establish, nav=None):
     cmd = [sys.executable, os.path.join(HERE, "v3_engine.py"), "--json"]
+    if SHADOW: cmd += ["--client-id", "151"]
     if establish: cmd.append("--establish")
     if nav: cmd += ["--nav", str(nav)]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -468,6 +490,7 @@ def save_plan(path, plan, t, resting):
     snap = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
             "asof": t["asof"], "nav": t["nav"],
             "investable_nav": t.get("investable_nav"), "plan": plan,
+            "targets": t, "resting_detail": resting,
             "scope": sorted(syms),
             "positions": _scoped_positions(t.get("positions_by_account"), syms),
             "resting": {k: v.get("net", 0) for k, v in (resting or {}).items()
@@ -513,14 +536,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true", help="actually place orders")
     ap.add_argument("--establish", action="store_true")
+    ap.add_argument("--shadow", action="store_true", help="dry-run with isolated state and no notifications")
     ap.add_argument("--save-plan", metavar="FILE",
                     help="dry run: write the plan + a freshness fingerprint for later replay")
+    ap.add_argument("--save-targets", metavar="FILE",
+                    help="save the exact engine snapshot used to build the plan")
     ap.add_argument("--plan", metavar="FILE",
                     help="--live: replay EXACTLY this approved plan instead of recomputing")
     ap.add_argument("--nav", type=float, default=None)
     ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=4001)
     ap.add_argument("--client-id", type=int, default=52)
     a = ap.parse_args()
+    if a.shadow and a.live: ap.error("cannot combine --shadow with --live")
+    if a.shadow: configure_shadow()
 
     got, why = acquire_lock()
     if not got:
@@ -541,6 +569,9 @@ def _main(a):
     except Exception as e:
         n = bump_fail(f"engine: {e}", key="engine")
         emit(f"engine failed ({n} malfunction(s)): {e}"); sys.exit(3)
+
+    if getattr(a, "save_targets", None):
+        with open(a.save_targets, "w") as f: json.dump(t, f, indent=1)
 
     try:
         resting = get_resting(a.host, a.port, a.client_id + 30)
@@ -604,6 +635,7 @@ def _main(a):
     print(f"v3_execute [{mode}]  asof {t['asof']}  NAV ${nav:,.0f}"
           + ("   ⚠ US market OPEN — orders will fill immediately, not rest to the open" if rth else ""))
     if not plan:
+        if not a.live and a.save_plan: save_plan(a.save_plan, [], t, resting)
         print("  nothing to do — all buckets within band"); clear_fail(); return
 
     if resting:
@@ -654,6 +686,7 @@ def _main(a):
         for o in plan:
             print(f"     {o['action']:<4} {o['qty']:>5} {o['symbol']:<6} = ${o['notional']:>10,.0f}")
     if not plan:
+        if not a.live and a.save_plan: save_plan(a.save_plan, [], t, resting)
         print("  nothing left after clamping"); clear_fail(); return
 
     plan, fund_errs, fund_notes = add_funding(plan, t, resting)
