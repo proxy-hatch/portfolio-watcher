@@ -24,3 +24,6 @@ ai-infra-bt/*.tmp
 
 # weekly yfinance cache written by metrics.py
 data/yf_weekly_*.json
+
+# dated local backups of the live runner
+run.sh.bak-*
