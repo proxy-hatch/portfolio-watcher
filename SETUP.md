@@ -78,7 +78,7 @@ created the venv.
 ## 4. Codex CLI and ChatGPT sign-in
 
 Set `codex_bin` in `watcher-config.json` to a working absolute executable path.
-This Mac uses `/Applications/Codex.app/Contents/Resources/codex` (verified 0.153.4).
+This Mac uses `/Applications/Codex.app/Contents/Resources/codex` (verified 0.154.0-alpha.6.2).
 
 ```sh
 /Applications/Codex.app/Contents/Resources/codex --version

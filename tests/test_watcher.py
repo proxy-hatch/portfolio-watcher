@@ -117,3 +117,21 @@ class PipelineTests(unittest.TestCase):
             text=Path(result['artifact_prefix']+'.outcome.md').read_text()
             self.assertNotIn('No execution was attempted.',text)
             self.assertIn('completion is unknown',text)
+
+    def test_reviewer_assesses_materiality_of_visible_coverage_gaps(self):
+        class CoverageServices(FakeServices):
+            def evidence(self,run,plan):return {'status':'unknown','summary':'Some coverage is incomplete; no identified halt.'}
+        with tempfile.TemporaryDirectory() as td:
+            result=self.invoke(td,CoverageServices(),shadow=True)
+            self.assertEqual(result['outcome'],'SHADOW-APPROVED')
+        with tempfile.TemporaryDirectory() as td:
+            result=self.invoke(td,CoverageServices(verdict='HALT'),shadow=True)
+            self.assertEqual(result['outcome'],'HALTED')
+
+    def test_identified_halt_cannot_be_overridden_by_approval(self):
+        class HaltServices(FakeServices):
+            def evidence(self,run,plan):return {'status':'halt','summary':'Active exchange halt.'}
+        with tempfile.TemporaryDirectory() as td:
+            svc=HaltServices();result=self.invoke(td,svc)
+            self.assertEqual(result['outcome'],'HALTED')
+            self.assertEqual(svc.executions,[])

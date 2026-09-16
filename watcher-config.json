@@ -8,5 +8,7 @@
   "evidence_timeout": 180,
   "report_timeout": 600,
   "vault": "/Users/shawn/vaults/trading-kb",
-  "playbook": "03-strategies/trend-following/Portfolio Playbook v3 (2026-08-25).md"
+  "playbook": "03-strategies/trend-following/Portfolio Playbook v3 (2026-08-25).md",
+  "review_prompt": "03-strategies/trend-following/Portfolio Watcher Daily Close Prompt.md",
+  "weekly_prompt": "03-strategies/trend-following/Portfolio Watcher Weekly Review Prompt.md"
 }

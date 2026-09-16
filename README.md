@@ -3,14 +3,15 @@
 A local autonomous trading pipeline on macOS: deterministic strategy calculations and
 execution rails, a bounded GPT-6 Astra circuit breaker, ntfy phone notifications, and
 interactive followups through Blink/mosh/tmux. It uses **Codex ChatGPT sign-in**, not
-separately billed API access. Strategy calculations and brokerage execution remain local.
+separately billed API access. Review and weekly task prompts plus the playbook are read
+live from the vault. Strategy calculations and brokerage execution remain local.
 
 ## Pipeline and cadence
 
 ```
 launchd → run.sh → watcher.py
   v3_execute.py dry-run → frozen plan + its exact engine snapshot
-  catalysts + web-only evidence collection → tool-free Astra verdict
+  catalysts + fetched current halt feed + web-only evidence collection → tool-free Astra verdict
   valid APPROVE + unchanged plan → existing replay checks → execution
   controller records actual outcome → macOS banner + ntfy
 
@@ -25,7 +26,7 @@ trading failed. Its failure cannot change that outcome or gate execution.
 
 The model cannot change quantities, symbols, prices or strategy parameters. The controller
 requires completed structured output (`verdict`, `reason`, `plan_sha256`) and matching
-artifact bytes. Missing/invalid output, unknown material risk, timeout, auth or quota
+artifact bytes. Missing/invalid output, material uncertainty, timeout, auth or quota
 failure means no execution. The executor rechecks its existing freshness, positions,
 resting orders and price-drift guards before replay.
 
@@ -49,10 +50,12 @@ The scheduled adapter ignores personal config, project instructions, plugins and
 It preserves the vendor model instructions but derives a restricted runtime tool catalog:
 no shell, file editing, Code Mode, agents, apps or skill discovery. The reviewer has no
 tools; evidence/reporting explicitly enable web search. Unexpected tool events invalidate
-the result. Codex login is explicitly restricted to ChatGPT; API environment variables
-are not inherited. No automatic provider or API-billing fallback exists.
+the result. Evidence gaps are preserved as unknown for the final reviewer to assess; an
+identified active halt always blocks execution. Codex login is explicitly restricted to
+ChatGPT; API environment variables are not inherited. No automatic provider or API-billing
+fallback exists.
 
-Verified executable: `/Applications/Codex.app/Contents/Resources/codex` (0.153.4).
+Verified executable: `/Applications/Codex.app/Contents/Resources/codex` (0.154.0-alpha.6.2).
 The Homebrew binary failed its version probe on this machine; do not silently fall back.
 Revalidate capabilities after upgrading Codex. [CLI documentation](https://learn.chatgpt.com/docs/non-interactive-mode).
 
