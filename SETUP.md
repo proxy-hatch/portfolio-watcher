@@ -4,7 +4,7 @@ End-to-end install for a fresh machine. For day-to-day operation (stop/restart/
 followup/alerts) see [README.md](README.md).
 
 Prerequisites: macOS, [Docker](https://www.docker.com/) (or OrbStack), [uv](https://docs.astral.sh/uv/),
-the [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode), and an Interactive
+the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), and an Interactive
 Brokers account with the market-data subscriptions you need.
 
 ---
@@ -21,7 +21,7 @@ docker compose -f docker-compose.ib-gateway.yml --env-file .env.ib-gateway up -d
 
 Ports (bound to localhost only): `127.0.0.1:4001` → live API, `4002` → paper, `5900` → VNC.
 - Set `READ_ONLY_API=no` in `.env.ib-gateway` so the interactive `watcher-followup`
-  session and the sanctioned autonomous executor can place orders.
+  session can place orders (the scheduled run never places orders regardless).
 - The gateway auto-restarts daily at `AUTO_RESTART_TIME` (default 11:59 PM Asia/Taipei);
   the API is unavailable for ~1-2 min then — the watcher schedules avoid that window.
 - Check it's up: `docker logs algo-trader-ib-gateway-1 | grep "Login has completed"`.
@@ -56,7 +56,7 @@ change host/port/client_id.)
 
 > Writes (placing/cancelling orders) do NOT go through ibkr-cli — `ibkr-cli buy --submit`
 > was observed to cancel marketable orders that didn't fill instantly. Order placement
-> uses `ib_async` directly in the autonomous executor and authorized interactive followups.
+> uses `ib_async` directly in the interactive followup session. See README "Models".
 
 ---
 
@@ -75,20 +75,11 @@ created the venv.
 
 ---
 
-## 4. Codex CLI and ChatGPT sign-in
+## 4. Claude Code CLI
 
-Set `codex_bin` in `watcher-config.json` to a working absolute executable path.
-This Mac uses `/Applications/Codex.app/Contents/Resources/codex` (verified 0.154.0-alpha.6.2).
-
-```sh
-/Applications/Codex.app/Contents/Resources/codex --version
-/Applications/Codex.app/Contents/Resources/codex login
-/Applications/Codex.app/Contents/Resources/codex -c 'forced_login_method="chatgpt"' login status
-```
-
-Sign in with ChatGPT. The watcher pins `gpt-6-astra` and rejects API-key login mode.
-Do not copy auth tokens into the repo. Keep Claude installed only if you want to resume
-historical Claude runs. See README for model roles and deadlines.
+`run.sh` calls the real binary at `/opt/homebrew/bin/claude` (Sonnet 4.6, medium thinking);
+`followup.sh` uses Opus 4.8 (high thinking). Make sure `claude` is installed and
+authenticated (run `claude` once interactively to log in).
 
 ---
 
@@ -98,7 +89,7 @@ historical Claude runs. See README for model roles and deadlines.
 echo "pw-watcher-$(uuidgen | tr 'A-Z' 'a-z' | tr -d '-' | cut -c1-16)" > secrets/ntfy-topic
 ```
 Install the [ntfy](https://ntfy.sh/) app and subscribe to that topic. `notify.sh` pushes
-to it after trading outcomes and scheduled weekly report completion/failure. (Swap the `curl` block in `notify.sh` for
+to it on 🚨/URGENT or an open action window. (Swap the `curl` block in `notify.sh` for
 Pushover/email if preferred.)
 
 ---
@@ -118,5 +109,5 @@ edit the `.plist` ProgramArguments/StandardOut paths first. Then verify:
 
 ```bash
 launchctl list | grep portfolio-watcher
-~/workspace/portfolio-watcher/run.sh daily --shadow   # test without live execution
+~/workspace/portfolio-watcher/run.sh daily      # optional: one manual run now
 ```

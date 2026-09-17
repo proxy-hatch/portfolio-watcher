@@ -57,6 +57,15 @@ def last_completed_session(now=None):
         d -= dt.timedelta(days=1)
     return d
 
+def _account_type(account_type, buying_power, available):
+    """registered | margin | cash, from IBKR's own AccountType and leverage."""
+    t = (account_type or "").upper()
+    if any(k in t for k in ("IRA", "TFSA", "RRSP", "REGISTERED", "RETIREMENT")):
+        return "registered"
+    if buying_power and available and buying_power > 1.5*max(available, 1.0):
+        return "margin"
+    return "cash"
+
 def drop_incomplete(px, cutoff):
     """Remove bars dated after the last completed session."""
     dropped = {}
@@ -162,7 +171,7 @@ def main():
         for p in ib.positions():
             pos[p.contract.symbol] += p.position
             per_acct[p.account][p.contract.symbol] += p.position
-        cash, avail = {}, {}
+        cash, avail, atype, bpow = {}, {}, {}, {}
         if nav is None or True:
             tot = 0.0
             for acct in ib.managedAccounts():
@@ -170,7 +179,9 @@ def main():
                 # U27464927 is a pending application that reports nothing.
                 if acct.startswith("F"): continue
                 for v in ib.accountValues(acct):
+                    if v.tag == "AccountType": atype[acct] = v.value   # currency is ""
                     if v.currency != "USD": continue
+                    if v.tag == "BuyingPower": bpow[acct] = float(v.value)
                     if v.tag == "NetLiquidation": tot += float(v.value)
                     elif v.tag == "TotalCashValue": cash[acct] = float(v.value)
                     # AvailableFunds is what IBKR actually checks an order against.
@@ -230,6 +241,11 @@ def main():
                # what an order can actually be placed against, per account
                "available_by_account": {k: round(avail.get(k, cash.get(k, 0.0)), 2)
                                         for k in set(cash) | set(avail)},
+               # registered (TFSA/RRSP) accounts cannot borrow and cannot spend a sale
+               # until it settles; a margin account can net a same-day SGOV sale
+               # against a buy. The executor must never use margin as money.
+               "account_types": {k: _account_type(atype.get(k), bpow.get(k), avail.get(k))
+                                 for k in set(cash) | set(avail)},
                "positions_by_account": {a: dict(d) for a, d in per_acct.items()},
                # last close for EVERY held/traded symbol, legacy included — lets the
                # executor flag resting limits that sit far from market (it previously
@@ -261,11 +277,18 @@ def main():
         # --- SLEEVE (gate per-fund during warm-up) --------------------------
         bd, bl = blend_series(px, SLEEVE["symbols"])
         sv = wilder_vol(bl, SLEEVE["win"])
-        gates = {}
+        # Playbook §3: the gate runs on the BLEND. Per-fund gating was a warm-up
+        # stopgap "until ~Oct 2026" because a blend needs 10 monthly closes; the
+        # blend's 11th monthly close arrived 2026-05, so the stopgap had expired.
+        # It also cost -1.2pp CAGR in the 8-year proxy test for NO drawdown benefit
+        # (-22.3% either way): one fund's close could liquidate both. Per-fund
+        # status is still computed and reported, but only the blend decides.
+        sleeve_on, blend_detail = regime_on(bd, bl, sv)
+        gates = {"blend (decides)": (sleeve_on, blend_detail)}
         for s in SLEEVE["symbols"]:
             ds = sorted(px[s]); cs = [px[s][d] for d in ds]
-            gates[s] = regime_on(ds, cs, wilder_vol(cs, SLEEVE["win"]))
-        sleeve_on = all(g[0] for g in gates.values())
+            on_s, det_s = regime_on(ds, cs, wilder_vol(cs, SLEEVE["win"]))
+            gates[f"{s} (info only)"] = (on_s, det_s)
         sL = 0.0 if not sleeve_on else min(SLEEVE["cap"], SLEEVE["vol_target"]/sv)
         s_alloc = inav*SLEEVE["alloc"]; s_inv = s_alloc*sL
         legs = {}

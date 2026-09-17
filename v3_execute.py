@@ -15,7 +15,6 @@ Exit: 0 ok/nothing to do · 2 blocked by a guard · 3 IBKR failure · 4 kill swi
 import argparse, json, os, subprocess, sys, datetime as dt, math
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SHADOW = False
 STATE = os.path.join(HERE, "state")
 KILL = os.path.join(STATE, "AUTOEXEC_OFF")
 FAILS = os.path.join(STATE, "autoexec-consecutive-failures")
@@ -23,32 +22,24 @@ AUDIT = os.path.join(STATE, "orders-audit.jsonl")
 LOCK  = os.path.join(STATE, "v3_execute.lock")
 NAVH  = os.path.join(STATE, "nav-history.jsonl")
 
-def configure_shadow():
-    """Dry-run accounting is private; read the real baseline without updating it."""
-    global STATE, KILL, FAILS, AUDIT, LOCK, NAVH, SHADOW
-    SHADOW = True
-    live_state = os.path.join(HERE, "state")
-    STATE = os.path.join(live_state, "shadow-executor")
-    os.makedirs(STATE, exist_ok=True)
-    KILL = os.path.join(STATE, "AUTOEXEC_OFF")
-    FAILS = os.path.join(STATE, "autoexec-consecutive-failures")
-    AUDIT = os.path.join(STATE, "orders-audit.jsonl")
-    LOCK = os.path.join(STATE, "v3_execute.lock")
-    NAVH = os.path.join(STATE, "nav-history.jsonl")
-    for name in ("nav-history.jsonl", "AUTOEXEC_OFF"):
-        src, dst = os.path.join(live_state, name), os.path.join(STATE, name)
-        if os.path.exists(src):
-            with open(src) as f: text = f.read()
-            with open(dst, "w") as f: f.write(text)
-        elif os.path.exists(dst): os.remove(dst)
-
 # ---- rails ---------------------------------------------------------------
 WHITELIST   = {"QLD", "AIS", "AIPO", "BRK B", "SGOV"}
-ACCOUNTS    = {"QLD": "U17856045",      # TFSA — §1.2c core
-               "AIS": "U3847490",       # Margin — sleeve
-               "AIPO": "U3847490",      # Margin — sleeve
-               "BRK B": "U17884372",    # RRSP — ballast
-               "SGOV": None}            # parked per-account, not traded here
+# Account routing is a PREFERENCE, never a constraint (2026-09-17). Each order fills its
+# preferred account first and only what is left spills to the next account. QLD used to be
+# pinned to the TFSA; when the TFSA ran dry the core could buy almost nothing while the
+# RRSP held $5.3k cash + $36k SGOV and Margin held $55k SGOV.
+ACCOUNT_PREFERENCE = {
+    "QLD":   ["U17856045", "U17884372", "U3847490"],   # TFSA -> RRSP -> Margin  (core)
+    "BRK B": ["U17884372", "U17856045", "U3847490"],   # RRSP -> TFSA -> Margin  (ballast)
+    "AIS":   ["U3847490", "U17884372", "U17856045"],   # Margin -> RRSP -> TFSA  (sleeve)
+    "AIPO":  ["U3847490", "U17884372", "U17856045"],   # Margin -> RRSP -> TFSA  (sleeve)
+}
+ACCOUNTS = {sym: prefs[0] for sym, prefs in ACCOUNT_PREFERENCE.items()}
+ACCOUNTS["SGOV"] = None            # the cash bucket; sold per account only as funding
+# Used only if the engine does not report account types. Unknown -> registered, the
+# conservative case: no borrowing and no same-run funding.
+DEFAULT_ACCOUNT_TYPES = {"U17856045": "registered", "U17884372": "registered",
+                         "U3847490": "margin"}
 MAX_RUN_NOTIONAL_PCT = 0.10   # ≤10% of NAV traded in any single run
 MAX_ORDER_NOTIONAL_PCT = 0.08 # ≤8% of NAV in any single order
 COLLAR = 0.005                # marketable limit = last ±0.5%; never a market order
@@ -117,7 +108,6 @@ def emit(msg):
     print(msg, file=sys.stderr)
 
 def notify(title, body, prio="default"):
-    if SHADOW: return
     try: subprocess.run([os.path.join(HERE, "notify.sh"), title, body, prio],
                         check=False, capture_output=True, timeout=20)
     except Exception: pass
@@ -219,7 +209,6 @@ def get_resting(host, port, cid):
 
 def get_targets(establish, nav=None):
     cmd = [sys.executable, os.path.join(HERE, "v3_engine.py"), "--json"]
-    if SHADOW: cmd += ["--client-id", "151"]
     if establish: cmd.append("--establish")
     if nav: cmd += ["--nav", str(nav)]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -264,102 +253,148 @@ def build_plan(t, resting):
 
 def add_funding(plan, t, resting):
     """
-    Make every BUY payable from what its OWN account can actually spend right now,
-    and queue SGOV sells to top the account up for later runs.
+    Decide WHICH ACCOUNT each order goes to, and pay for every order without ever
+    borrowing. Returns (orders_by_account, blocking_errors, notes).
 
-    The hard constraint learned on 2026-09-01: a funding SELL placed in the same run
-    CANNOT pay for that run's BUY. Runs fire at 09:00 Taipei = ~21:00 ET, five hours
-    after the close, so the sell is a GTC limit that cannot fill for another ~12
-    hours — while IBKR checks buying power the instant the buy is submitted:
+    What counts as money depends on the account type:
+      registered (TFSA, RRSP): only cash already there. It cannot borrow, and a sale
+          placed tonight cannot pay for a buy placed tonight — the sale fills ~12h later
+          but the broker checks cash on submission (the 2026-09-01 Error 201). So when a
+          registered account is short it sells SGOV tonight and buys on the NEXT run.
+      margin: cash plus SGOV sold in the SAME run; both trades settle together and net.
+          Borrowing power is NEVER money. From 2026-09-03 the executor read IBKR's
+          AvailableFunds, which in a margin account includes what the broker will lend,
+          and the 09-16 AIPO buy ran a $2,286 margin loan beside $55k of idle SGOV.
 
-        Error 201: Order rejected - reason:Available converted to base: 5964.23 USD
-                   Cash needed for this order and other pending orders: 9199.59 USD
-
-    Sorting SELLs ahead of BUYs and sleeping 2.5s between them never addressed this;
-    it only controls submission order, not settlement. So the buy is CLAMPED to what
-    the account can pay today and the shortfall is funded for next time — the same
-    "clamp, never block" rule already used for size caps. The remainder converges over
-    runs instead of stalling (09-02 and 09-03 both re-planned the identical rejected
-    order and had to be vetoed by the reviewer).
-
-    Two different cash numbers, deliberately:
-      spendable — AvailableFunds, what IBKR checks an order against NOW. Caps buys.
-      committed — spendable + proceeds of SGOV sells already resting. Decides whether
-                  to sell MORE, so a pending sell is never duplicated.
-
-    Returns (plan_with_funding, blocking_errors, notes).
+    IBKR's reported cash does not subtract resting BUY orders, so their cost is taken
+    off first — otherwise the same dollars get spent twice and the second order is
+    rejected. Each order claims its preferred account before anything spills over, so
+    an RRSP-native BRK.B buy is never crowded out by QLD overflow. Sells come from the
+    LEAST preferred account holding the shares, so positions drift back home.
     """
-    avail = t.get("available_by_account") or t.get("cash_by_account", {}) or {}
-    posacct = t.get("positions_by_account", {})
-    sgov_px = t.get("sgov_price")
-    if not sgov_px:
-        return plan, [], []
+    px_sgov = float(t.get("sgov_price") or 0.0)
+    cash = {a: float(v) for a, v in (t.get("cash_by_account") or {}).items()}
+    avail = {a: float(v) for a, v in (t.get("available_by_account") or {}).items()}
+    types = dict(DEFAULT_ACCOUNT_TYPES); types.update(t.get("account_types") or {})
+    pos = {a: dict(d) for a, d in (t.get("positions_by_account") or {}).items()}
+    accounts = set(cash) | set(avail) | set(pos)
+    for prefs in ACCOUNT_PREFERENCE.values(): accounts |= set(prefs)
 
-    transit_sh = {}
-    for od in (resting.get("SGOV") or {}).get("orders", []):
-        if od["action"] == "SELL" and od.get("account"):
-            transit_sh[od["account"]] = transit_sh.get(od["account"], 0.0) + od["qty"]
+    queued_sell, committed = {}, {}
+    for sym, r in (resting or {}).items():
+        for od in (r or {}).get("orders", []):
+            acct = od.get("account")
+            if not acct: continue
+            if od.get("action") == "SELL":
+                queued_sell[(acct, sym)] = queued_sell.get((acct, sym), 0.0) + float(od["qty"])
+            elif od.get("action") == "BUY":
+                committed[acct] = committed.get(acct, 0.0) + float(od["qty"])*float(od.get("limit") or 0)
 
-    need, notes, errs = {}, [], []
-    for o in plan:
-        if o["action"] == "BUY" and o["account"]:
-            need[o["account"]] = need.get(o["account"], 0.0) + o["notional"]
+    def is_margin(a): return types.get(a, "registered") == "margin"
+    tonight = {a: max(0.0, min(cash.get(a, 0.0), avail.get(a, cash.get(a, 0.0)))
+                      - committed.get(a, 0.0)) for a in accounts}
+    tonight = {a: max(0.0, v) for a, v in tonight.items()}
+    sgov_free = {a: max(0.0, pos.get(a, {}).get("SGOV", 0.0) - queued_sell.get((a, "SGOV"), 0.0))
+                 for a in accounts}
+    # registered: SGOV already queued to sell by an earlier run is money on its way for a
+    # buy still waiting. (Margin SGOV sells paid for their buys the night they were placed.)
+    on_way = {a: (0.0 if is_margin(a) else queued_sell.get((a, "SGOV"), 0.0)*px_sgov)
+              for a in accounts}
+    notes, errs, legs, sgov_sell, sgov_why = [], [], {}, {}, {}
 
-    fund, drop = [], []
-    for acct, req in sorted(need.items()):
-        spendable = avail.get(acct, 0.0)
-        pend_sh = transit_sh.get(acct, 0.0)
-        transit = pend_sh*sgov_px
-        if pend_sh:
-            notes.append(f"{acct}: {pend_sh:.0f} SGOV (${transit:,.0f}) already resting from "
-                         f"an earlier run — counted toward funding, not re-sold")
+    def sell_sgov(a, dollars, why):
+        if dollars <= 0 or px_sgov <= 0: return 0.0
+        n = int(min(sgov_free[a], math.ceil(dollars/px_sgov)))
+        if n <= 0: return 0.0
+        sgov_free[a] -= n
+        sgov_sell[a] = sgov_sell.get(a, 0) + n
+        sgov_why.setdefault(a, []).append(why)
+        return n*px_sgov
 
-        # 1. clamp this account's BUYs to what it can pay for TODAY
-        budget = spendable/CASH_BUFFER
-        if req > budget:
-            legs = [o for o in plan if o["action"] == "BUY" and o["account"] == acct]
-            legs.sort(key=lambda o: o["notional"], reverse=True)
-            room = budget
-            for o in legs:
-                if o["notional"] <= room:
-                    room -= o["notional"]; continue
-                newq = int(room // o["price"]) if o["price"] else 0
-                if newq*o["price"] < MIN_ORDER_USD:
-                    drop.append(o)
-                    notes.append(f"{o['symbol']} {acct}: deferred entirely — "
-                                 f"${spendable:,.0f} spendable cannot cover a "
-                                 f"${MIN_ORDER_USD:,.0f} minimum order")
-                else:
-                    notes.append(f"{o['symbol']} {acct}: {o['qty']} -> {newq} sh — capped at "
-                                 f"${spendable:,.0f} spendable (a funding sell placed now "
-                                 f"cannot fill until the next open); remainder next run")
-                    o["qty"] = newq
-                    o["notional"] = newq*o["price"]
-                    o["reason"] += " [cash-capped]"
-                    room -= o["notional"]
+    def add_leg(o, a, q):
+        key = (o["symbol"], o["action"], a)
+        if key in legs:
+            legs[key]["qty"] += q; legs[key]["notional"] = legs[key]["qty"]*o["price"]
+            return
+        prefs = ACCOUNT_PREFERENCE.get(o["symbol"]) or [o.get("account")]
+        tag = "" if a == prefs[0] else f" [fallback account {a}]"
+        legs[key] = dict(o, qty=q, notional=q*o["price"], account=a, reason=o["reason"]+tag)
 
-        # 2. queue SGOV so the REMAINDER is affordable on a later run
-        short = req*CASH_BUFFER - spendable - transit
-        if short <= 0:
-            continue
-        held = posacct.get(acct, {}).get("SGOV", 0.0) - pend_sh
-        sell = math.ceil(short/sgov_px)
-        if sell > held:
-            sell = int(held)
-            if sell > 0:
-                notes.append(f"{acct}: only {held:.0f} SGOV free — funding what it can; "
-                             f"the target closes over several runs")
-            else:
-                notes.append(f"{acct}: no SGOV left to fund with; the remainder waits for "
-                             f"cash from elsewhere")
-        if sell > 0:
-            fund.append(dict(symbol="SGOV", action="SELL", qty=int(sell), price=sgov_px,
-                             notional=sell*sgov_px, account=acct, funding=True, pending=0,
-                             reason=f"top up {acct} for the NEXT run: ${spendable:,.0f} "
-                                    f"spendable vs ${req:,.0f} wanted"))
+    # 0. never borrow: clear margin loans, and pre-fund margin buys already resting
+    for a in sorted(accounts):
+        c = cash.get(a, 0.0)
+        loan = max(0.0, -c)
+        pending = max(0.0, committed.get(a, 0.0) - max(0.0, c)) if is_margin(a) else 0.0
+        covered = queued_sell.get((a, "SGOV"), 0.0)*px_sgov if is_margin(a) else 0.0
+        short = max(0.0, loan + pending - covered)
+        if short > 0.5:
+            got = sell_sgov(a, short*CASH_BUFFER, f"clear ${short:,.0f} that would be borrowed")
+            bits = []
+            if loan > 0.5: bits.append(f"cash is -${loan:,.0f} (a margin loan)")
+            if pending > 0.5: bits.append(f"${pending:,.0f} of resting buys not covered by cash")
+            notes.append(f"{a}: " + " and ".join(bits) + f" — selling SGOV ${got:,.0f} "
+                         "so nothing is borrowed")
+            if got + 0.5 < short:
+                notes.append(f"{a}: only ${got:,.0f} of SGOV free to cover ${short:,.0f}")
 
-    plan = [o for o in plan if o not in drop]
-    return fund + plan, errs, notes
+    # 1. sells: take shares from the LEAST preferred account holding them
+    for o in [o for o in plan if o["action"] == "SELL"]:
+        prefs = ACCOUNT_PREFERENCE.get(o["symbol"]) or [o.get("account")]
+        holders = [a for a in pos if pos[a].get(o["symbol"], 0.0) > 0]
+        order = [a for a in reversed(prefs) if a in holders] + [a for a in holders if a not in prefs]
+        left = int(o["qty"])
+        for a in order:
+            have = int(pos[a].get(o["symbol"], 0.0) - queued_sell.get((a, o["symbol"]), 0.0))
+            q = min(left, max(0, have))
+            if q > 0: add_leg(o, a, q); left -= q
+            if left <= 0: break
+        if left > 0:
+            notes.append(f"{o['symbol']}: {left} of {o['qty']} shares to sell not found in any account")
+
+    # 2. buys: every order takes its preferred account first, then spills over
+    buys = sorted([o for o in plan if o["action"] == "BUY"], key=lambda o: -o["notional"])
+    remaining = {id(o): int(o["qty"]) for o in buys}
+    for rnd in (0, 1):
+        for o in buys:
+            prefs = ACCOUNT_PREFERENCE.get(o["symbol"]) or [o.get("account")]
+            for a in (prefs[:1] if rnd == 0 else prefs[1:]):
+                rem = remaining[id(o)]
+                if rem <= 0: break
+                unit = o["price"]*CASH_BUFFER
+                if is_margin(a):
+                    q = int(min(rem, (tonight[a] + sgov_free[a]*px_sgov) // unit))
+                    if q > 0 and (q*o["price"] >= MIN_ORDER_USD or q == rem):
+                        cost = q*unit
+                        from_cash = min(cost, tonight[a]); tonight[a] -= from_cash
+                        sell_sgov(a, cost - from_cash, f"pay for {q} {o['symbol']} tonight")
+                        add_leg(o, a, q); remaining[id(o)] -= q
+                    continue
+                q = int(min(rem, tonight[a] // unit))
+                if q > 0 and (q*o["price"] >= MIN_ORDER_USD or q == rem):
+                    tonight[a] -= q*unit; add_leg(o, a, q)
+                    remaining[id(o)] -= q; rem -= q
+                if rem > 0:
+                    q2 = int(min(rem, (on_way[a] + sgov_free[a]*px_sgov) // unit))
+                    if q2 > 0:
+                        cost = q2*unit
+                        from_way = min(cost, on_way[a]); on_way[a] -= from_way
+                        sell_sgov(a, cost - from_way, f"fund {q2} {o['symbol']} on the next run")
+                        notes.append(f"{o['symbol']}: {q2} sh go into {a} on the NEXT run — a "
+                                     "registered account can't spend tonight's sale tonight"
+                                     + (f" (${from_way:,.0f} already on its way)" if from_way else ""))
+                        remaining[id(o)] -= q2
+    for o in buys:
+        if remaining[id(o)] > 0:
+            notes.append(f"{o['symbol']}: {remaining[id(o)]} of {o['qty']} shares cannot be paid "
+                         "for in any account without borrowing — left for a later run")
+
+    funding = [dict(symbol="SGOV", action="SELL", qty=int(n), price=px_sgov, notional=n*px_sgov,
+                    account=a, funding=True, pending=0, reason="funding: "+"; ".join(sgov_why[a]))
+               for a, n in sorted(sgov_sell.items()) if n > 0]
+    ordered = (funding + [l for l in legs.values() if l["action"] == "SELL"]
+               + [l for l in legs.values() if l["action"] == "BUY"])
+    return ordered, errs, notes
+
 
 def check_rails(plan, nav, t):
     """
@@ -422,11 +457,7 @@ BENIGN_ERROR_CODES = {1100, 1101, 1102, 2103, 2104, 2105, 2106, 2107, 2108, 2119
 
 
 def rejection_note(errors, trade):
-    """The broker's own words for why an order did not stand.
-
-    Prefers errorEvent (which carries "Error 201 ... Cash needed for this order"),
-    falls back to Trade.log, and returns "" when the broker said nothing.
-    """
+    """The broker's own words for why an order did not stand (errorEvent, then Trade.log)."""
     oid = getattr(getattr(trade, "order", None), "orderId", None)
     msgs = list(errors.get(oid, [])) if oid is not None else []
     if not msgs:
@@ -450,8 +481,7 @@ def place(plan, host, port, cid=None):
     # IBKR delivers a rejection reason on errorEvent keyed by the order's reqId, NOT
     # on Trade.log. place() only ever read tr.log, so 2026-09-01's
     #   "Error 201 ... Available converted to base: 5964.23 USD"
-    # reached exec.txt and nothing else: the audit stored note "; " and the push
-    # notification said nothing. Subscribe for the duration of the placement.
+    # reached exec.txt and nothing else. Subscribe for the duration of placement.
     errors = {}
     def _collect_error(*args):
         req = args[0] if args else -1
@@ -469,9 +499,9 @@ def place(plan, host, port, cid=None):
         dupes = {}
         ib.reqAllOpenOrders(); ib.sleep(2)
         for tr in ib.openTrades():
-            dupes[(tr.contract.symbol, tr.order.action, tr.order.totalQuantity)] = tr.order.orderId
+            dupes[(tr.contract.symbol, tr.order.action, tr.order.totalQuantity, tr.order.account)] = tr.order.orderId
         for o in plan:
-            dk = (o["symbol"], o["action"], float(o["qty"]))
+            dk = (o["symbol"], o["action"], float(o["qty"]), o.get("account"))
             if dk in dupes:
                 placed.append(dict(o, status="SKIPPED_DUPLICATE",
                                    note=f"identical order #{dupes[dk]} already resting")); continue
@@ -496,8 +526,7 @@ def place(plan, host, port, cid=None):
             # how a "we exited" belief diverges from reality.
             bad = st in ("Inactive", "ApiCancelled", "Cancelled")
             why = rejection_note(errors, tr)
-            # perm_id is the stable handle: orderId is 0 for anything this client did
-            # not place, and fills.py matches executions back to this record by permId.
+            # perm_id is the stable handle fills.py matches executions back to.
             placed.append(dict(o, status=("REJECTED" if bad else "PLACED"), limit=lmt,
                                order_id=tr.order.orderId, perm_id=tr.order.permId,
                                order_status=st, note=why))
@@ -526,7 +555,6 @@ def save_plan(path, plan, t, resting):
     snap = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
             "asof": t["asof"], "nav": t["nav"],
             "investable_nav": t.get("investable_nav"), "plan": plan,
-            "targets": t, "resting_detail": resting,
             "scope": sorted(syms),
             "positions": _scoped_positions(t.get("positions_by_account"), syms),
             "resting": {k: v.get("net", 0) for k, v in (resting or {}).items()
@@ -572,11 +600,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true", help="actually place orders")
     ap.add_argument("--establish", action="store_true")
-    ap.add_argument("--shadow", action="store_true", help="dry-run with isolated state and no notifications")
     ap.add_argument("--save-plan", metavar="FILE",
                     help="dry run: write the plan + a freshness fingerprint for later replay")
-    ap.add_argument("--save-targets", metavar="FILE",
-                    help="save the exact engine snapshot used to build the plan")
     ap.add_argument("--plan", metavar="FILE",
                     help="--live: replay EXACTLY this approved plan instead of recomputing")
     ap.add_argument("--nav", type=float, default=None)
@@ -585,8 +610,6 @@ def main():
     ap.add_argument("--no-reconcile", action="store_true",
                     help="skip the broker-fill reconciliation pass")
     a = ap.parse_args()
-    if a.shadow and a.live: ap.error("cannot combine --shadow with --live")
-    if a.shadow: configure_shadow()
 
     got, why = acquire_lock()
     if not got:
@@ -608,9 +631,6 @@ def _main(a):
         n = bump_fail(f"engine: {e}", key="engine")
         emit(f"engine failed ({n} malfunction(s)): {e}"); sys.exit(3)
 
-    if getattr(a, "save_targets", None):
-        with open(a.save_targets, "w") as f: json.dump(t, f, indent=1)
-
     try:
         resting = get_resting(a.host, a.port, a.client_id + 30)
     except Exception as e:
@@ -618,14 +638,12 @@ def _main(a):
         emit(f"could not read resting orders ({n} malfunction(s)): {e}")
         sys.exit(3)
 
-    # Reconcile broker fills BEFORE planning. The execution window is short and the
-    # `time` filter is ignored by IBKR, so a day not reconciled is a day of fill
-    # prices lost for good. Never fatal: this is bookkeeping, not a trading rail.
+    # Reconcile broker fills BEFORE planning. IBKR's execution window is short and
+    # its time filter is ignored, so a day not reconciled is a day of fills lost.
     if not (a.live and a.plan) and not getattr(a, "no_reconcile", False):
         try:
             import fills
-            summary = fills.reconcile(a.host, a.port, a.client_id + 40,
-                                      audit_path=AUDIT,
+            summary = fills.reconcile(a.host, a.port, a.client_id + 40, audit_path=AUDIT,
                                       store_path=os.path.join(STATE, "fills.jsonl"),
                                       audit_writer=log_audit)
             print(fills.render(summary))
@@ -687,7 +705,6 @@ def _main(a):
     print(f"v3_execute [{mode}]  asof {t['asof']}  NAV ${nav:,.0f}"
           + ("   ⚠ US market OPEN — orders will fill immediately, not rest to the open" if rth else ""))
     if not plan:
-        if not a.live and a.save_plan: save_plan(a.save_plan, [], t, resting)
         print("  nothing to do — all buckets within band"); clear_fail(); return
 
     if resting:
@@ -738,21 +755,20 @@ def _main(a):
         for o in plan:
             print(f"     {o['action']:<4} {o['qty']:>5} {o['symbol']:<6} = ${o['notional']:>10,.0f}")
     if not plan:
-        if not a.live and a.save_plan: save_plan(a.save_plan, [], t, resting)
         print("  nothing left after clamping"); clear_fail(); return
 
     plan, fund_errs, fund_notes = add_funding(plan, t, resting)
     # Print the funding picture BEFORE any exit: on a shortfall this used to die at
     # sys.exit(2) before the funding legs were shown, so the reviewer saw a plan with
     # the funding half missing and no indication anything had gone wrong.
-    if fund_notes or fund_errs or any(o.get("funding") for o in plan):
-        print("\n  funding (buys are capped at TODAY's spendable cash; these SELLs "
-              "top the account up for the NEXT run):")
+    if fund_notes or fund_errs or plan:
+        print("\n  final orders by account (each account spends only its own cash; margin never "
+              "borrows; a registered account short of cash sells SGOV tonight, buys next run):")
         for n_ in fund_notes:
             print(f"     - {n_}")
         for o in plan:
-            if o.get("funding"):
-                print(f"     SELL {o['qty']:>5} SGOV = ${o['notional']:>9,.0f}  [{o['account']}]  {o['reason']}")
+            print(f"     {o['action']:<4} {o['qty']:>5} {o['symbol']:<5} = ${o['notional']:>9,.0f}  "
+                  f"[{o['account']}]  {o['reason']}")
     if fund_errs:
         for e in fund_errs: emit(f"  BLOCKED: {e}")
         log_audit(dict(mode=mode, blocked=fund_errs, plan=plan))

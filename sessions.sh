@@ -15,8 +15,8 @@ export PATH=/Users/shawn/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/b
 export HOME=/Users/shawn
 DIR=${0:A:h}                       # repo dir (resolves the ~/.local/bin/wf-sessions symlink)
 TSV="$DIR/state/sessions.tsv"
-TMUX_BIN=${WATCHER_TMUX_BIN:-/opt/homebrew/bin/tmux}
-FOLLOWUP="$DIR/followup.sh"
+TMUX_BIN=/opt/homebrew/bin/tmux
+FOLLOWUP=/Users/shawn/.local/bin/watcher-followup
 
 usage() {
   cat >&2 <<'USAGE'
@@ -28,7 +28,7 @@ wf-sessions — list, reconnect to, or clear Portfolio Watcher followup sessions
                                (reattaches its tmux if live, else resumes from disk)
   wf-sessions clear            kill ALL live watcher tmux sessions at once — use this
                                instead of resuming each and Ctrl-D. Sessions stay
-                               resumable afterward (the provider keeps them on disk).
+                               resumable afterward (claude keeps them on disk).
   wf-sessions -h | --help      show this help
 
 History lives in state/sessions.tsv (one row per scheduled run). Plain `wf <kind>`
@@ -76,23 +76,15 @@ if [[ "${1:-}" == resume || "${1:-}" == reconnect ]]; then
   if [[ "$sel" == <-> ]]; then                   # a number is an INDEX only (1 = newest),
     (( sel >= 1 && sel <= n )) && pos=$(( n - sel + 1 ))   # never a sid prefix
   else
-    matches=0
-    for ((i=1; i<=n; i++)); do
-      if [[ "${SID_A[i]:l}" == "${sel:l}"* ]]; then pos=$i; (( matches++ )); fi
+    for ((i=1; i<=n; i++)); do                   # else match the sid (full or prefix, ci)
+      [[ "${SID_A[i]:l}" == "${sel:l}"* ]] && pos=$i
     done
-    (( matches <= 1 )) || { echo "Ambiguous session prefix: $sel; use a longer ID or list number." >&2; exit 64; }
   fi
   (( pos )) || { echo "No session matches '$sel'. Run 'wf-sessions' to list." >&2; exit 1 ;}
   k=${KIND_A[pos]}; sid=${SID_A[pos]}
-  suffix=""; safe_arg=""
-  case "${3:-}" in
-    --safe|-s) suffix="-safe"; safe_arg=" --safe" ;;
-    "") ;;
-    *) echo "usage: wf-sessions resume <#|sid> [--safe]" >&2; exit 64 ;;
-  esac
   echo "Reconnecting to $k session from ${AT_A[pos]} ($sid) ..." >&2
   exec ${TMUX_BIN} -L watcher -f "$DIR/tmux.conf" \
-    new-session -A -s "wf-$k$suffix-${sid[1,8]}" "${(q)FOLLOWUP} $k --sid ${(q)sid}$safe_arg"
+    new-session -A -s "wf-$k-${sid[1,8]}" "$FOLLOWUP $k --sid $sid"
 fi
 
 # ---- list [daily|weekly] ------------------------------------------------------------------
@@ -107,13 +99,7 @@ printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' '#' 'started' 'label' 'sid' 'ou
 printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' '---' '-------------------------' '----------------------' '--------' '----------------' '------'
 for ((i=1; i<=n; i++)); do
   pos=$(( n - i + 1 ))                            # newest first; # is global (ignores filter)
-  k=${KIND_A[pos]}; sid=${SID_A[pos]}
-  suffix=""; safe_arg=""
-  case "${3:-}" in
-    --safe|-s) suffix="-safe"; safe_arg=" --safe" ;;
-    "") ;;
-    *) echo "usage: wf-sessions resume <#|sid> [--safe]" >&2; exit 64 ;;
-  esac; at=${AT_A[pos]}; s8=${sid[1,8]}
+  k=${KIND_A[pos]}; sid=${SID_A[pos]}; at=${AT_A[pos]}; s8=${sid[1,8]}
   [[ -n "$filter" && "$k" != "$filter" ]] && continue
   st=""
   [[ -n "${LIVE[wf-$k-$s8]:-}" || -n "${LIVE[wf-$k-safe-$s8]:-}" ]] && st="● live in tmux"

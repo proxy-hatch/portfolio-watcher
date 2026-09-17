@@ -16,7 +16,7 @@ own logged-in devices can reach it.
 
 ```
 iPhone: Tailscale + Blink(mosh) ──encrypted──► Mac: sshd + mosh + tmux
-  Home-Screen icon → blinkshell:// → mosh mac -- wf daily → codex resume (GPT-6 Astra; Claude for historical runs)
+  Home-Screen icon → blinkshell:// → mosh mac -- wf daily → claude -r (Opus 4.8)
 ```
 
 ---
@@ -73,7 +73,7 @@ method below is the most universally compatible, so it's the default here.)
 for touch — **two-finger swipe up** scrolls back through the live chat; **tap once** (or
 press `q`) to jump to the bottom and resume typing. Works because tmux keeps the
 full-screen output in a 100k-line scrollback (`~/.local/bin/wf` → `tmux.conf`). Plain ↑ in
-The agent still recalls your last prompt — press **Esc** to clear it. After any `tmux.conf`
+Claude still recalls your last prompt — press **Esc** to clear it. After any `tmux.conf`
 change, reset with `tmux -L watcher kill-server`, then `wf daily` again.
 
 ---
@@ -122,7 +122,7 @@ blinkshell://run?key=home&cmd=mosh1%20macbook%20--%20%2FUsers%2Fshawn%2F.local%2
 ```
 
 (`--safe` / `-s` drops the skip-permissions flag; any other args after the kind pass
-straight through to the selected provider.) A `--safe` run gets its own tmux session (`wf-daily-safe`),
+straight through to `claude`.) A `--safe` run gets its own tmux session (`wf-daily-safe`),
 kept separate from the default `wf-daily` so the two never reattach into each other. From
 the shell it's `wf daily --safe` (or `watcher-followup daily --safe` without tmux).
 
@@ -136,12 +136,3 @@ the shell it's `wf daily --safe` (or `watcher-followup daily --safe` without tmu
 - Lost phone? Remove it from your tailnet (Tailscale admin console → Machines → remove) to
   instantly cut its access.
 - Do NOT enable Tailscale **Funnel** for this host (that would expose it publicly).
-
-## Codex migration (September 2026)
-
-Phone shortcuts, ntfy subscription, Tailscale, mosh and the `-L watcher` tmux server stay
-the same. `wf` now keys new sessions by watcher run ID. A first followup prepares a
-separate Astra conversation from the actual outcome; later reconnects resume it.
-`--safe` uses a separate conversation and tmux session. `wf-sessions resume <id> --safe`
-is supported, and ambiguous ID prefixes are rejected. Old Claude sessions still resume
-with Claude. `wf run daily --shadow` uses its own tmux session and cannot execute orders.

@@ -145,7 +145,8 @@ def render(summary):
         return (f"  fills: nothing new ({summary.get('visible', 0)} visible to the broker API)")
     lines = [f"  fills reconciled: {summary['new']} new execution(s)"]
     for o in summary["orders"]:
-        head = (f"     {o.get('action') or o['side']:<4} {o['shares']:>5.0f} {o['symbol']:<5} "
+        # never begin with BUY/SELL: run.sh treats such lines as plan ORDERS
+        head = (f"     filled {o.get('action') or o['side']} {o['shares']:.0f} {o['symbol']} "
                 f"@ {o['avg_price']}")
         if o.get("matched"):
             bits = []
@@ -153,7 +154,8 @@ def render(summary):
             if o.get("price_improvement_bps") is not None:
                 bits.append(f"{o['price_improvement_bps']:+.1f}bps vs limit")
             if o.get("slip_vs_ref_bps") is not None:
-                bits.append(f"{o['slip_vs_ref_bps']:+.1f}bps vs close")
+                # vs the PRIOR close: mostly the overnight move, not a trading cost
+                bits.append(f"{o['slip_vs_ref_bps']:+.1f}bps vs prior close incl. overnight move")
             if o.get("fill_ratio") is not None and o["fill_ratio"] < 1:
                 bits.append(f"PARTIAL {o['fill_ratio']:.0%}")
             lines.append(head + ("  (" + ", ".join(bits) + ")" if bits else ""))
