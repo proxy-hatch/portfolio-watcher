@@ -237,14 +237,23 @@ class Services:
                     if str(r.get('ts',''))[:10]>=str(dates[0]): rows.append(r)
                 except ValueError: rows.append({'warning':'unreadable audit row'})
         # Avoid silent truncation: fail with a visible report error if bounds exceed.
+        # Correlations from the watcher's OWN accumulated price history, so the
+        # thesis pass stops being blocked on data frozen at the approval date.
+        try:
+            import price_store
+            corr=price_store.correlations(self.root,['QLD','AIS','AIPO','BRK B','SGOV'],250)
+        except Exception as exc: corr={'error':str(exc)}
         packet={'current_run':run.data,'daily_logs':logs,'execution_audit':rows,
+                'correlations':corr,
                 'current_artifacts':{suffix:run.artifact(suffix).read_text() if run.artifact(suffix).exists() else 'UNAVAILABLE' for suffix in ('targets.json','plan.txt','evidence.json','exec.txt')}}
         packet_text=json.dumps(packet)
         if len(packet_text)>250000: raise AgentError('report','weekly packet exceeds 250KB; review in followup')
         atomic_write(run.artifact('weekly-packet.json'),packet_text)
         prompt=('Scheduled weekly portfolio report. Trading has already finished with the controller outcome below. '
                 'You cannot approve trades or modify strategy. Summarize executed/clamped/halted/missing runs, allocation convergence, regime proximity, sleeve health, legacy holdings, execution quality, catalysts and conditional thesis review. '
-                'Use supplied logs and audit as evidence; an APPROVE is not execution, and PLACED is not a fill. Missing days are findings. Never calculate fill slippage from submission limits alone. '
+                'Use supplied logs and audit as evidence; an APPROVE is not execution, and PLACED is not a fill. Missing days are findings. '
+                'Audit rows with mode FILLS carry REAL broker executions (avg_price, slip_vs_ref_bps, fill_ratio) — use those for execution quality, and never infer slippage from submission limits alone. '
+                'The correlations block is computed from the watcher\'s own stored price history; report its n and window, and say so if n is too small to conclude anything. '
                 'Use a bounded web search for current issuer/market evidence as needed. Cite specific packet files/rows or direct URLs. '
                 'Unknowns must be labeled; proposals need user sign-off. Do not explore files or start monitoring. Return report Markdown and a concise phone summary.\nPLAYBOOK:\n'+
                 (vault/self.config['playbook']).read_text()+'\nWEEKLY TASK:\n'+(vault/self.config['weekly_prompt']).read_text()+'\nPACKET:\n'+packet_text)

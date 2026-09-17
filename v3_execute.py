@@ -417,6 +417,25 @@ def check_rails(plan, nav, t):
                    and (o.get("funding") or o["notional"] >= MIN_ORDER_USD)]
     return errs, notes
 
+# Connection-status messages IBKR pushes down the same error channel as real problems.
+BENIGN_ERROR_CODES = {1100, 1101, 1102, 2103, 2104, 2105, 2106, 2107, 2108, 2119, 2158, 2100}
+
+
+def rejection_note(errors, trade):
+    """The broker's own words for why an order did not stand.
+
+    Prefers errorEvent (which carries "Error 201 ... Cash needed for this order"),
+    falls back to Trade.log, and returns "" when the broker said nothing.
+    """
+    oid = getattr(getattr(trade, "order", None), "orderId", None)
+    msgs = list(errors.get(oid, [])) if oid is not None else []
+    if not msgs:
+        for entry in (getattr(trade, "log", []) or [])[-2:]:
+            text = str(getattr(entry, "message", "") or "")
+            if text: msgs.append(text)
+    return "; ".join(m for m in msgs if m)[:240]
+
+
 def place(plan, host, port, cid=None):
     from ib_async import IB, Stock, LimitOrder
     # Always the same client id so v3 can cancel/modify what it placed.
@@ -428,6 +447,21 @@ def place(plan, host, port, cid=None):
     # cash; ordering here does not and never did.
     plan = sorted(plan, key=lambda o: 0 if o["action"] == "SELL" else 1)
     placed = []
+    # IBKR delivers a rejection reason on errorEvent keyed by the order's reqId, NOT
+    # on Trade.log. place() only ever read tr.log, so 2026-09-01's
+    #   "Error 201 ... Available converted to base: 5964.23 USD"
+    # reached exec.txt and nothing else: the audit stored note "; " and the push
+    # notification said nothing. Subscribe for the duration of the placement.
+    errors = {}
+    def _collect_error(*args):
+        req = args[0] if args else -1
+        code = args[1] if len(args) > 1 else 0
+        msg = args[2] if len(args) > 2 else ""
+        if code in BENIGN_ERROR_CODES: return
+        errors.setdefault(req, []).append(f"{code}: {msg}")
+    try:
+        ib.errorEvent += _collect_error
+    except Exception: pass
     try:
         # Quantities are already NET of resting orders (build_plan). The only
         # duplicate guard still needed is an exact same-side same-qty repeat,
@@ -461,13 +495,15 @@ def place(plan, host, port, cid=None):
             # FAILURE, not a placement. Silently counting it as PLACED is exactly
             # how a "we exited" belief diverges from reality.
             bad = st in ("Inactive", "ApiCancelled", "Cancelled")
-            why = ""
-            if bad:
-                logs = getattr(tr, "log", []) or []
-                why = "; ".join(str(getattr(e, "message", "")) for e in logs[-2:])[:160]
+            why = rejection_note(errors, tr)
+            # perm_id is the stable handle: orderId is 0 for anything this client did
+            # not place, and fills.py matches executions back to this record by permId.
             placed.append(dict(o, status=("REJECTED" if bad else "PLACED"), limit=lmt,
-                               order_id=tr.order.orderId, order_status=st, note=why))
+                               order_id=tr.order.orderId, perm_id=tr.order.permId,
+                               order_status=st, note=why))
     finally:
+        try: ib.errorEvent -= _collect_error
+        except Exception: pass
         try: ib.disconnect()
         except Exception: pass
     return placed
@@ -546,6 +582,8 @@ def main():
     ap.add_argument("--nav", type=float, default=None)
     ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=4001)
     ap.add_argument("--client-id", type=int, default=52)
+    ap.add_argument("--no-reconcile", action="store_true",
+                    help="skip the broker-fill reconciliation pass")
     a = ap.parse_args()
     if a.shadow and a.live: ap.error("cannot combine --shadow with --live")
     if a.shadow: configure_shadow()
@@ -579,6 +617,20 @@ def _main(a):
         n = bump_fail(f"resting-orders: {e}", key="resting")
         emit(f"could not read resting orders ({n} malfunction(s)): {e}")
         sys.exit(3)
+
+    # Reconcile broker fills BEFORE planning. The execution window is short and the
+    # `time` filter is ignored by IBKR, so a day not reconciled is a day of fill
+    # prices lost for good. Never fatal: this is bookkeeping, not a trading rail.
+    if not (a.live and a.plan) and not getattr(a, "no_reconcile", False):
+        try:
+            import fills
+            summary = fills.reconcile(a.host, a.port, a.client_id + 40,
+                                      audit_path=AUDIT,
+                                      store_path=os.path.join(STATE, "fills.jsonl"),
+                                      audit_writer=log_audit)
+            print(fills.render(summary))
+        except Exception as e:
+            print(f"  fills: reconciliation unavailable ({e})", file=sys.stderr)
 
     sess = t.get("asof")
     naverr = nav_sanity(t["nav"])

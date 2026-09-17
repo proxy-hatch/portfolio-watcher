@@ -14,7 +14,7 @@ Spec: 03-strategies/trend-following/Portfolio Playbook v3 (2026-08-25).md
 
 Exit codes: 0 ok · 2 stale/missing data · 3 IBKR connection failure
 """
-import argparse, json, math, sys, datetime as dt
+import argparse, json, math, os, sys, datetime as dt
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 
@@ -207,6 +207,17 @@ def main():
         if inav <= 0:
             print(f"investable NAV <= 0 (nav ${nav:,.0f} - legacy ${legacy_val:,.0f})",
                   file=sys.stderr); sys.exit(2)
+
+        # Persist every series we just pulled. The weekly's correlation refresh has
+        # been deferred three times because the only cached data is frozen at the
+        # playbook approval date, so recomputing from it would just reproduce the
+        # approved figures. This costs no extra IBKR request and accumulates real
+        # history from here on. Never fatal — reporting must not break sizing.
+        try:
+            import price_store
+            price_store.save(px, os.path.dirname(os.path.abspath(__file__)))
+        except Exception as e:
+            print(f"warning: price series not persisted: {e}", file=sys.stderr)
 
         out = {"asof": max(px[CORE["signal"]]),
                "last_completed_session": cutoff.isoformat(),
