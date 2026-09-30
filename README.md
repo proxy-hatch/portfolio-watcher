@@ -116,7 +116,7 @@ Two phases share **one Claude session**:
 | `notify.sh` | macOS banner + ntfy.sh phone push |
 | `deadman.sh` / `deadman.py` | dead-man's switch: independent silence detector + multi-channel escalation (`--status`, `--dry-run`, `--test`) |
 | `state/deadman-status.txt` | last health verdict — the pull channel; `wf-sessions` prints it |
-| `secrets/ntfy-email` | optional: one address, enables the email escalation leg (gitignored) |
+| `secrets/ntfy-email` / `secrets/ntfy-token` | optional pair: recipient + ntfy.sh account token, enabling the email escalation leg (gitignored) |
 | `watcher-settings.json` | permission allow/deny for the headless run |
 | `pyproject.toml` / `uv.lock` / `.python-version` | uv-managed deps (`ib_async`, `pandas`, `numpy`, `yfinance`) |
 | `docker-compose.ib-gateway.yml` / `.env.ib-gateway.example` | IB Gateway container + env template |
@@ -273,8 +273,17 @@ deadman.sh --now '2026-09-30 12:00'   # replay any date's verdict
 ```
 
 **Enable the email leg** (strongly recommended — it is the only layer that survives a dead
-app): put one address in `secrets/ntfy-email`. It is used for critical alerts only, so it
-stays meaningful and stays inside ntfy's free-tier quota.
+app). It needs two files, because **ntfy.sh refuses anonymous email sending**
+(`HTTP 400`, code `40053`) — the `Email:` header requires a free ntfy.sh account:
+
+```bash
+echo 'you@example.com' > secrets/ntfy-email   # recipient
+echo 'tk_xxxxxxxxxxxx'  > secrets/ntfy-token   # ntfy.sh account access token
+```
+
+Both are gitignored. The leg fires on **critical alerts only**, so it stays meaningful and
+stays inside the free-tier quota. Without the token the switch still works — it just loses
+its most durable layer, and says so in `logs/deadman.log` rather than failing quietly.
 
 **Test the alarm on purpose, periodically.** An untested alarm is a decoration: run
 `deadman.sh --test` and confirm it actually reaches your phone.

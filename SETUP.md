@@ -126,9 +126,16 @@ It checks at 12:00 / 18:00 / 22:00 daily and at login. Then enable the durable e
 leg and prove the whole path works:
 
 ```bash
-echo 'you@example.com' > secrets/ntfy-email   # critical alerts only; gitignored
-./deadman.sh --test                            # must actually reach your phone
+echo 'you@example.com' > secrets/ntfy-email   # recipient; critical alerts only
+echo 'tk_xxxxxxxxxxxx'  > secrets/ntfy-token   # ntfy.sh account token — REQUIRED:
+                                               # ntfy.sh rejects anonymous email (code 40053)
+chmod 600 secrets/ntfy-*
+./deadman.sh --test                            # must actually reach your phone AND inbox
+tail -2 logs/deadman.log                       # confirms "email leg sent (HTTP 200)"
 ```
+
+Get the token from ntfy.sh → sign up (free) → Account → Access tokens. Without it the
+email layer is skipped, and `logs/deadman.log` says exactly why.
 
 Check health any time with `wf health`, or `./deadman.sh --status`. Every `wf-sessions`
 listing also leads with the verdict — including a warning if the switch itself has stopped

@@ -116,21 +116,47 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] ALERT [$SEV] $TITLE" >> "$LOG"
 # Opt-in: create secrets/ntfy-email containing one address. Absent, the switch still works,
 # it just loses its most durable leg. secrets/ is gitignored.
 EMAIL_FILE="$DIR/secrets/ntfy-email"
+TOKEN_FILE="$DIR/secrets/ntfy-token"
 TOPIC_FILE="$DIR/secrets/ntfy-topic"
 if [[ "$SEV" == critical && -s "$EMAIL_FILE" && -s "$TOPIC_FILE" ]]; then
-  EMAIL="$(< "$EMAIL_FILE")"; TOPIC="$(< "$TOPIC_FILE")"
-  if /usr/bin/curl -fsS --max-time 20 \
+  # secrets/ntfy-email is hand-edited, so treat it as untrusted input: take the FIRST line
+  # only, strip surrounding whitespace, and require it to look like an address. A stray
+  # newline would otherwise be injected raw into the HTTP header block.
+  EMAIL="${$(/usr/bin/head -1 "$EMAIL_FILE")##[[:space:]]##}"
+  EMAIL="${EMAIL%%[[:space:]]##}"
+  TOPIC="$(< "$TOPIC_FILE")"
+
+  # ntfy.sh refuses anonymous email sending (HTTP 400, code 40053) — the Email header needs
+  # a free ntfy.sh account and an access token in secrets/ntfy-token. Without it this leg
+  # cannot work, so say so plainly rather than failing vaguely.
+  typeset -a AUTH=()
+  if [[ -s "$TOKEN_FILE" ]]; then
+    AUTH=(-H "Authorization: Bearer ${$(/usr/bin/head -1 "$TOKEN_FILE")//[[:space:]]/}")
+  fi
+
+  if [[ ! "$EMAIL" =~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg SKIPPED — secrets/ntfy-email is not a valid address" >> "$LOG"
+  elif (( ! ${#AUTH} )); then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg SKIPPED — needs secrets/ntfy-token (ntfy.sh forbids anonymous email)" >> "$LOG"
+  else
+    BODYF="$(/usr/bin/mktemp -t deadman-ntfy)"
+    HTTP="$(/usr/bin/curl -sS -o "$BODYF" -w '%{http_code}' --max-time 20 \
        -H "Title: ${TITLE}" -H "Priority: urgent" -H "Tags: rotating_light" \
-       -H "Email: ${EMAIL}" \
+       -H "Email: ${EMAIL}" "${AUTH[@]}" \
        -d "${BODY}
 
 -- Portfolio Watcher dead-man's switch. Full status: wf-sessions, or
    cat ~/workspace/portfolio-watcher/state/deadman-status.txt" \
-       "https://ntfy.sh/${TOPIC}" >/dev/null 2>&1
-  then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg sent" >> "$LOG"
-  else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg FAILED (network or ntfy quota)" >> "$LOG"
+       "https://ntfy.sh/${TOPIC}" 2>/dev/null)"
+    if [[ "$HTTP" == 2* ]]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg sent (HTTP $HTTP)" >> "$LOG"
+    else
+      # Log what ntfy ACTUALLY said. Guessing "network or quota" once sent me chasing the
+      # wrong cause; the server states the reason, so record it (address redacted).
+      ERR="$(/usr/bin/head -c 300 "$BODYF" | /usr/bin/sed "s|${EMAIL}|<redacted>|g" | /usr/bin/tr -d '\n')"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg FAILED (HTTP ${HTTP:-none}) ${ERR}" >> "$LOG"
+    fi
+    /bin/rm -f "$BODYF"
   fi
 elif [[ "$SEV" == critical && ! -s "$EMAIL_FILE" ]]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')]   email leg skipped — no secrets/ntfy-email" >> "$LOG"
