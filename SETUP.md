@@ -111,3 +111,25 @@ edit the `.plist` ProgramArguments/StandardOut paths first. Then verify:
 launchctl list | grep portfolio-watcher
 ~/workspace/portfolio-watcher/run.sh daily      # optional: one manual run now
 ```
+
+## 7. Dead-man's switch (do not skip)
+
+Everything above reports through one push channel. If that channel dies, the system fails
+silently. Install the independent watchdog:
+
+```bash
+cp launchd/com.shawn.portfolio-watcher-deadman.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.shawn.portfolio-watcher-deadman.plist
+```
+
+It checks at 12:00 / 18:00 / 22:00 daily and at login. Then enable the durable escalation
+leg and prove the whole path works:
+
+```bash
+echo 'you@example.com' > secrets/ntfy-email   # critical alerts only; gitignored
+./deadman.sh --test                            # must actually reach your phone
+```
+
+Check health any time with `wf health`, or `./deadman.sh --status`. Every `wf-sessions`
+listing also leads with the verdict — including a warning if the switch itself has stopped
+running.

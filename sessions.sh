@@ -31,6 +31,9 @@ wf-sessions — list, reconnect to, or clear Portfolio Watcher followup sessions
                                resumable afterward (claude keeps them on disk).
   wf-sessions -h | --help      show this help
 
+Every listing starts with the dead-man's switch verdict, so the system's health is
+visible even when a push notification never arrived. Full detail: deadman.sh --status
+
 History lives in state/sessions.tsv (one row per scheduled run). Plain `wf <kind>`
 targets the latest run; use this to reach older ones or tidy up lingering sessions.
 USAGE
@@ -95,6 +98,39 @@ case "${1:-}" in
   *) usage; exit 64 ;;
 esac
 
+# ---- health banner ------------------------------------------------------------------------
+# The dead-man's switch's PULL channel. On 2026-09-27..30 the watcher failed four days
+# running and every push alert was swallowed by an offloaded ntfy app. A pushed alert can
+# vanish; a line printed here cannot, because you are already looking. Whoever runs
+# `wf-sessions` sees the true health of the system whether or not any notification arrived.
+health_banner() {
+  local DM="$DIR/state/deadman-status.txt" mt age verdict unit
+  if [[ ! -r "$DM" ]]; then
+    print -r -- "  health : (dead-man's switch has never run — see deadman.sh --help)"
+    print -r -- ""
+    return
+  fi
+  mt=$(/usr/bin/stat -f %m "$DM" 2>/dev/null || echo 0)
+  age=$(( ($(date +%s) - mt) / 60 ))
+  if (( age < 60 )); then unit="${age}m"; else unit="$(( age / 60 ))h"; fi
+  verdict=$(/usr/bin/grep -m1 '^verdict' "$DM" | /usr/bin/sed 's/^verdict *: *//')
+
+  if (( age > 1440 )); then
+    # Who watches the watcher: a stale status file means the SWITCH stopped, and its
+    # silence would otherwise read as good news — the exact trap this system fell into.
+    print -r -- "  health : ⚠ STALE — the dead-man's switch has not run in ${unit}"
+    print -r -- "           check it:  launchctl list | grep deadman"
+  elif [[ "$verdict" == OK ]]; then
+    print -r -- "  health : ✅ OK  (checked ${unit} ago)"
+  else
+    print -r -- "  health : 🚨 ${verdict}  (checked ${unit} ago)"
+    /usr/bin/grep -m1 '^  \[' "$DM" | /usr/bin/sed 's/^  /           /'
+    print -r -- "           detail:  deadman.sh --status"
+  fi
+  print -r -- ""
+}
+
+health_banner
 printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' '#' 'started' 'label' 'sid' 'outcome' 'tmux'
 printf '  %-3s  %-25s  %-22s  %-9s  %-16s  %s\n' '---' '-------------------------' '----------------------' '--------' '----------------' '------'
 for ((i=1; i<=n; i++)); do

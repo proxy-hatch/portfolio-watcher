@@ -73,6 +73,14 @@ Two phases share **one Claude session**:
   `state/sessions.tsv` (the history `wf-sessions` reads).
 - **Alerting — `notify.sh`.** Severity-based: a macOS banner every run, plus an
   [ntfy](https://ntfy.sh) push to your phone on anything actionable or a failure.
+- **Dead-man's switch — `deadman.sh` + `deadman.py`.** A *separate* scheduled job that
+  watches the run history and shouts when the system goes quiet or keeps failing. It is
+  the answer to the hardest failure mode in any unattended automation: **the job broke and
+  the alarm broke too, so the silence looked like success.** Design rules that follow from
+  that — it runs from its own scheduler entry, uses the system interpreter rather than the
+  project venv, and escalates over several channels including one that is *pull*-durable
+  (a status file the CLI prints, so you learn the truth just by looking, with no delivery
+  involved). See [Alerts](#alerts--human-intervention).
 - **Interactive followup — `followup.sh` → `watcher-followup`.** Resumes the run's exact
   session with `claude -r` on a stronger model — full context already loaded — so you, being
   present, can take the actions it proposed. Skips permission prompts by default (you resumed
@@ -106,6 +114,9 @@ Two phases share **one Claude session**:
 | `catalysts.py` | compute helper #2 — external API + a curated local data file; degrades gracefully, never blocks the run (example: upcoming earnings + a macro-event calendar) |
 | `data/econ_calendar.json` | curated local data file the helper reads (example: macro events). **Refresh annually** — `catalysts.py` flags `calendar_stale` once `verified_through` passes |
 | `notify.sh` | macOS banner + ntfy.sh phone push |
+| `deadman.sh` / `deadman.py` | dead-man's switch: independent silence detector + multi-channel escalation (`--status`, `--dry-run`, `--test`) |
+| `state/deadman-status.txt` | last health verdict — the pull channel; `wf-sessions` prints it |
+| `secrets/ntfy-email` | optional: one address, enables the email escalation leg (gitignored) |
 | `watcher-settings.json` | permission allow/deny for the headless run |
 | `pyproject.toml` / `uv.lock` / `.python-version` | uv-managed deps (`ib_async`, `pandas`, `numpy`, `yfinance`) |
 | `docker-compose.ib-gateway.yml` / `.env.ib-gateway.example` | IB Gateway container + env template |
@@ -113,7 +124,7 @@ Two phases share **one Claude session**:
 | `secrets/ntfy-topic` | the ntfy topic (gitignored) |
 | `state/last-<kind>-session` / `state/sessions.tsv` | latest session id + full run→session history (resume / `wf-sessions`) |
 | `logs/` | per-run JSON output, stderr, and `<kind>.log` timestamps |
-| `~/Library/LaunchAgents/com.shawn.portfolio-watcher-{daily,weekly}.plist` | the installed schedules |
+| `~/Library/LaunchAgents/com.shawn.portfolio-watcher-{daily,weekly,deadman}.plist` | the installed schedules |
 
 **The prompts themselves live in the vault and are read live every run** (edit = deploy):
 - `~/vaults/trading-kb/03-strategies/trend-following/Portfolio Watcher Daily Close Prompt.md`
@@ -221,6 +232,52 @@ if you need a new indicator.
   The recommended action is also in that day's run log under "Recommended Manual Actions".
 - **Change push channel:** `notify.sh` uses ntfy by default. Swap the `curl` block for
   Pushover/email, or rotate the topic by editing `secrets/ntfy-topic`.
+
+### The dead-man's switch
+
+Push notifications are a *best-effort* channel. The app can be uninstalled, offloaded by
+the OS to reclaim space, denied notification permission, or simply out of signal past the
+broker's message retention. When that happens an unattended system fails **silently** — and
+because no alert arrives, the silence is indistinguishable from everything being fine.
+That is how this repo once lost four consecutive days.
+
+So health is reported on a second, independent path:
+
+| Layer | Channel | Survives |
+|---|---|---|
+| 1 | `state/deadman-status.txt`, printed at the top of every `wf-sessions` | everything — it needs no delivery, only that you look |
+| 2 | macOS banner | no network |
+| 3 | ntfy push | the normal path |
+| 4 | ntfy → email (critical only, opt-in) | an offloaded app, a reinstalled phone, expired push retention |
+
+`deadman.py` reads the run ledger (`state/sessions.tsv`) and is **schedule-aware**, so the
+weekend gap is not mistaken for silence. It flags:
+
+- **SILENT** — a scheduled slot passed with no run recorded (scheduler down, laptop off)
+- **STUCK** — a run started and never reported an outcome
+- **FAILING** — N consecutive runs failed. *A healthy heartbeat row is not a healthy
+  system*; this is the check that catches a dependency that died underneath a job which
+  otherwise still runs on time.
+- **HALTING** — N consecutive fail-closed halts: working as designed, but nothing is
+  progressing and nobody said so
+- **KILLSWITCH** — the manual stop has been left on for days and probably forgotten
+
+Repeats are deduplicated and re-sent every 12h while a problem persists; recovery sends one
+all-clear. Useful commands:
+
+```bash
+wf health                 # or: deadman.sh --status
+deadman.sh --dry-run      # evaluate and print, send nothing, change nothing
+deadman.sh --test         # fire a real alert through every channel, to prove they work
+deadman.sh --now '2026-09-30 12:00'   # replay any date's verdict
+```
+
+**Enable the email leg** (strongly recommended — it is the only layer that survives a dead
+app): put one address in `secrets/ntfy-email`. It is used for critical alerts only, so it
+stays meaningful and stays inside ntfy's free-tier quota.
+
+**Test the alarm on purpose, periodically.** An untested alarm is a decoration: run
+`deadman.sh --test` and confirm it actually reaches your phone.
 
 ---
 

@@ -29,6 +29,7 @@ wf — Portfolio Watcher: trigger a run, or resume one to act on it (reattachabl
                                permission prompts by default; --safe restores them
   wf run <daily|weekly>        trigger a FRESH run now (run.sh) inside tmux, so it
                                survives a dropped phone connection; follow up with `wf <kind>`
+  wf health                    is the system alive? (dead-man's switch verdict)
   wf -h | --help               show this help
 
 See also: wf-sessions (list / reconnect older sessions / clear tmux).
@@ -38,6 +39,10 @@ USAGE
 # Intercept sub-verbs before treating $1 as the kind.
 case "${1:-}" in
   -h|--help|help) usage; exit 0 ;;
+  health|status)
+    # Readable from the phone in one word. Answers "is it actually running?" without
+    # depending on a notification having arrived.
+    exec "$DIR/deadman.sh" --status ;;
   run|run-now|trigger)
     shift
     KIND=${1:-daily}

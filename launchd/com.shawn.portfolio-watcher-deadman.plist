@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shawn.portfolio-watcher-deadman</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/shawn/workspace/portfolio-watcher/deadman.sh</string>
+    </array>
+
+    <!-- EVERY day, including Sun/Mon when no run is scheduled: "the laptop never came
+         back" must not wait until Tuesday to be noticed. deadman.py is schedule-aware,
+         so the quiet days stay quiet on their own.
+
+         12:00 is the first useful check: the 09:00 run plus a 2.5h grace period. 18:00
+         and 22:00 re-check, so a same-day recovery is seen and a same-day failure gets
+         a second chance at a phone that was out of signal at noon.
+
+         This agent is DELIBERATELY separate from the daily/weekly agents. It has to
+         still fire when run.sh is the broken part — which on 2026-09-27..30 it was. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <!-- Also check at load, i.e. at login/boot. Coming back from a trip with the laptop
+         shut is precisely when you want to be told how many runs were missed. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>/Users/shawn</string>
+        <key>PATH</key><string>/Users/shawn/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/shawn/workspace/portfolio-watcher/logs/launchd-deadman.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/shawn/workspace/portfolio-watcher/logs/launchd-deadman.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
