@@ -71,8 +71,11 @@ fi
 
 # ---------- 1. deterministic targets ----------------------------------------
 say "2/5 computing targets (v3_engine.py) ..."
-if ! "$PY" "$DIR/v3_engine.py" --json > "$TARGETS" 2>>"$ERR"; then
-  RC=$?
+# Capture the engine's REAL exit code. `if ! cmd; then RC=$?` captures the status of the
+# NEGATED compound (always 0), which is why 2026-09-29/30 alerted "rc=0" and launchd
+# recorded both failed runs as exit 0 — masking a two-day outage from any exit-code check.
+"$PY" "$DIR/v3_engine.py" --json > "$TARGETS" 2>>"$ERR"; RC=$?
+if (( RC != 0 )); then
   echo "[$(date)] v3_engine failed rc=$RC" >> "$ERR"
   stamp "FAILED-engine"
   "$DIR/notify.sh" "🚨 Watcher $KIND — engine failed" "v3_engine rc=$RC (stale data or IBKR). No orders." urgent
