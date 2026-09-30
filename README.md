@@ -281,9 +281,13 @@ echo 'you@example.com' > secrets/ntfy-email   # recipient
 echo 'tk_xxxxxxxxxxxx'  > secrets/ntfy-token   # ntfy.sh account access token
 ```
 
-Both are gitignored. The leg fires on **critical alerts only**, so it stays meaningful and
-stays inside the free-tier quota. Without the token the switch still works — it just loses
-its most durable layer, and says so in `logs/deadman.log` rather than failing quietly.
+Both are gitignored (`chmod 600`). The account's email address must also be **verified** —
+ntfy returns `40052` until you click the link it sends you. The leg fires on **critical
+alerts only**, so it stays meaningful and stays inside the free-tier quota.
+
+Without the token the switch still works — it just loses its most durable layer, and says so
+in `logs/deadman.log` rather than failing quietly. Confirm the whole path with
+`deadman.sh --test`; you want `email leg sent (HTTP 200)`.
 
 **Test the alarm on purpose, periodically.** An untested alarm is a decoration: run
 `deadman.sh --test` and confirm it actually reaches your phone.

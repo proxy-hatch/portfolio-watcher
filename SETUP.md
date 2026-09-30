@@ -134,8 +134,15 @@ chmod 600 secrets/ntfy-*
 tail -2 logs/deadman.log                       # confirms "email leg sent (HTTP 200)"
 ```
 
-Get the token from ntfy.sh → sign up (free) → Account → Access tokens. Without it the
-email layer is skipped, and `logs/deadman.log` says exactly why.
+The email layer has **two** gates on ntfy.sh, and you hit them in this order:
+
+| Error | Meaning | Fix |
+|---|---|---|
+| `40053` anonymous email sending is not allowed | no token sent | sign up free at ntfy.sh → Account → Access tokens → put it in `secrets/ntfy-token` |
+| `40052` email address not verified | account email unconfirmed | click the verification link ntfy emails you, then retry |
+
+Until both are cleared the layer is skipped or fails — either way `logs/deadman.log` records
+the exact status and ntfy's own error text, so you never have to guess which gate you are on.
 
 Check health any time with `wf health`, or `./deadman.sh --status`. Every `wf-sessions`
 listing also leads with the verdict — including a warning if the switch itself has stopped
