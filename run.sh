@@ -77,8 +77,22 @@ say "2/5 computing targets (v3_engine.py) ..."
 "$PY" "$DIR/v3_engine.py" --json > "$TARGETS" 2>>"$ERR"; RC=$?
 if (( RC != 0 )); then
   echo "[$(date)] v3_engine failed rc=$RC" >> "$ERR"
-  stamp "FAILED-engine"
-  "$DIR/notify.sh" "🚨 Watcher $KIND — engine failed" "v3_engine rc=$RC (stale data or IBKR). No orders." urgent
+  # v3_engine ALREADY says which failure this is — its exit-code contract is
+  # "0 ok · 2 stale/missing data · 3 IBKR connection failure". Collapsing every code into
+  # one "engine failed" label is why 2026-09-27..30 read as a generic engine fault for four
+  # days when it was an unanswered 2FA leaving the gateway listening but logged out of IBKR.
+  # The information was here the whole time; this just stops throwing it away.
+  case $RC in
+    3) stamp "FAILED-gateway"
+       "$DIR/notify.sh" "🚨 Watcher $KIND — IBKR session down" \
+         "Port 4001 is listening but the API handshake timed out — usually an unanswered 2FA after a gateway restart. Check: docker logs algo-trader-ib-gateway-1 | tail -30. No orders placed." urgent ;;
+    2) stamp "FAILED-data"
+       "$DIR/notify.sh" "🚨 Watcher $KIND — stale data" \
+         "v3_engine rc=2: prices or NAV too old to trade on. No orders placed." urgent ;;
+    *) stamp "FAILED-engine"
+       "$DIR/notify.sh" "🚨 Watcher $KIND — engine failed" \
+         "v3_engine rc=$RC (unexpected). No orders placed." urgent ;;
+  esac
   exit $RC
 fi
 
