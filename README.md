@@ -300,6 +300,13 @@ in `logs/deadman.log` rather than failing quietly. Confirm the whole path with
   the API handshake fails for ~1–2 min during re-auth. The schedules (09:00 / 09:30 +0800) avoid
   that window. `run.sh` does a TCP probe and logs a WARN (non-fatal) if 4001 is unreachable.
 - Confirm gateway readiness: `docker logs algo-trader-ib-gateway-1 | grep "Login has completed"`.
+- **Auto-recovery (`gateway_recover.sh`).** When a run can't reach IBKR (port closed, or engine
+  rc=3 = port open but not logged in), `run.sh` restarts the gateway container once, pushes
+  "🔁 restarting IB Gateway", and waits up to 15 min for `Login has completed` — approve the IBKR
+  2FA push and the same run carries on. No separate health check: the failed run is the detector.
+  Gives up early if IBKR rejects the login again (a quick second try only trips its login
+  throttle). Added after 2026-10-25, when the Sunday cold restart hit an unhandled "Unrecognized
+  Username or Password" dialog and the gateway sat dead for 7 days.
 - If a run **FAILED** (you'll get a push + `rc≠0` in `logs/daily.log`), check
   `logs/daily-<timestamp>.err`. Common causes: gateway in its re-auth window, or `claude`
   needing re-auth (run `claude` once interactively to refresh).

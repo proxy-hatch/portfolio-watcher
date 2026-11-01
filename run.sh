@@ -61,11 +61,28 @@ stamp() { /usr/bin/python3 "$DIR/stamp_session.py" "$DIR/state/sessions.tsv" "$S
 say() { print -r -- "$(date '+%H:%M:%S')  $*"; echo "[$(date)] $*" >> "$LOGDIR/$KIND.log"; }
 say "=== $LABEL  ($KIND run, session ${SID[1,8]}) ==="
 
+# recover_gateway(): restart a stuck IB Gateway and wait for it to log back in. The failed
+# run is the detector — no separate health check. 2026-10-25..11-01 the gateway sat on an
+# unhandled IBKR login-rejection dialog for 7 days while every run just reported failure;
+# a restart sends a fresh 2FA push, so the run can still complete if it is approved.
+# At most once per run: a second restart minutes later only trips IBKR's login throttle.
+GW_RECOVERED=0; GW_RC=
+recover_gateway() {
+  (( GW_RECOVERED )) && return 1
+  GW_RECOVERED=1
+  say "   IBKR unreachable — restarting IB Gateway (approve the 2FA push to continue) ..."
+  "$DIR/notify.sh" "🔁 Watcher $KIND — restarting IB Gateway" \
+    "IBKR was unreachable. Approve the IBKR 2FA push on your phone within 15 min and this run continues." urgent
+  "$DIR/gateway_recover.sh" >> "$ERR" 2>&1; GW_RC=$?
+  say "   gateway_recover rc=$GW_RC (0 logged in · 1 docker failed · 2 no 2FA in time · 3 login rejected)"
+  return $GW_RC
+}
+
 say "1/5 checking IB Gateway on 127.0.0.1:4001 ..."
-if ! /usr/bin/nc -z -G 5 127.0.0.1 4001 2>/dev/null; then
-  echo "[$(date)] gateway TCP 4001 unreachable — aborting before any trading" >> "$ERR"
+if ! /usr/bin/nc -z -G 5 127.0.0.1 4001 2>/dev/null && ! recover_gateway; then
+  echo "[$(date)] gateway TCP 4001 unreachable, restart did not recover it — aborting before any trading" >> "$ERR"
   stamp "FAILED-gateway"
-  "$DIR/notify.sh" "🚨 Watcher $KIND — gateway down" "No IBKR connection; no orders placed." urgent
+  "$DIR/notify.sh" "🚨 Watcher $KIND — gateway down" "No IBKR connection, restart did not recover it (rc=$GW_RC); no orders placed." urgent
   exit 69
 fi
 
@@ -75,6 +92,11 @@ say "2/5 computing targets (v3_engine.py) ..."
 # NEGATED compound (always 0), which is why 2026-09-29/30 alerted "rc=0" and launchd
 # recorded both failed runs as exit 0 — masking a two-day outage from any exit-code check.
 "$PY" "$DIR/v3_engine.py" --json > "$TARGETS" 2>>"$ERR"; RC=$?
+# rc=3 = port open but the API handshake failed: the gateway is up but not logged in.
+if (( RC == 3 )) && recover_gateway; then
+  say "2/5 computing targets again after gateway restart ..."
+  "$PY" "$DIR/v3_engine.py" --json > "$TARGETS" 2>>"$ERR"; RC=$?
+fi
 if (( RC != 0 )); then
   echo "[$(date)] v3_engine failed rc=$RC" >> "$ERR"
   # v3_engine ALREADY says which failure this is — its exit-code contract is
@@ -85,7 +107,7 @@ if (( RC != 0 )); then
   case $RC in
     3) stamp "FAILED-gateway"
        "$DIR/notify.sh" "🚨 Watcher $KIND — IBKR session down" \
-         "Port 4001 is listening but the API handshake timed out — usually an unanswered 2FA after a gateway restart. Check: docker logs algo-trader-ib-gateway-1 | tail -30. No orders placed." urgent ;;
+         "Port 4001 is listening but the API handshake failed, and an automatic gateway restart did not fix it (gateway_recover rc=${GW_RC:-n/a}). Check: docker logs algo-trader-ib-gateway-1 | tail -30. No orders placed." urgent ;;
     2) stamp "FAILED-data"
        "$DIR/notify.sh" "🚨 Watcher $KIND — stale data" \
          "v3_engine rc=2: prices or NAV too old to trade on. No orders placed." urgent ;;
