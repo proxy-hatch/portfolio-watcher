@@ -621,7 +621,10 @@ def render(b, full=False):
 # ---- CLI ------------------------------------------------------------------------------
 def _targets():
     import v3_execute as X
-    return X.get_targets(False)
+    try:
+        return X.get_targets(False)
+    except Exception as e:
+        print(f"IBKR read failed — nothing drafted or approved: {e}", file=sys.stderr); sys.exit(3)
 
 
 def _notify(title, body, prio="high"):
