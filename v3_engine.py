@@ -219,6 +219,22 @@ def main():
             print(f"investable NAV <= 0 (nav ${nav:,.0f} - legacy ${legacy_val:,.0f})",
                   file=sys.stderr); sys.exit(2)
 
+        # --- tactical book (tob.py) -----------------------------------------
+        # Shares owned by an approved tactical bet are NOT bucket holdings. Counted here
+        # they look like core overweight and the next run trims the bet away (the
+        # 2026-11-01 finding). Their value stays in investable NAV — the book is carved
+        # out of the cash bucket — so only the drift base changes. An unreadable ledger
+        # is fatal: sizing around unknown tactical shares is exactly the bug.
+        try:
+            import tob
+            led = tob.load()
+            tac_acct, tac_sym = tob.holdings(led), tob.holdings_by_symbol(led)
+        except Exception as e:
+            print(f"tactical ledger unreadable: {e} — refusing to size", file=sys.stderr)
+            sys.exit(2)
+        bpos = defaultdict(float, pos)
+        for s, q in tac_sym.items(): bpos[s] -= q
+
         # Persist every series we just pulled. The weekly's correlation refresh has
         # been deferred three times because the only cached data is frozen at the
         # playbook approval date, so recomputing from it would just reproduce the
@@ -253,6 +269,11 @@ def main():
                # code for exactly the orders most likely to be stale).
                "prices": {s: px[s][max(px[s])] for s in px},
                "sgov_price": px[CASH["symbol"]][max(px[CASH["symbol"]])],
+               "tactical": {"holdings": tac_sym, "holdings_by_account": tac_acct,
+                            "value": round(sum(q*px[s][max(px[s])] for s, q in tac_sym.items()
+                                               if s in px), 2),
+                            "active": [b["id"] for b in tob.active(led)],
+                            "synced_at": led.get("synced_at")},
                "buckets": {}}
 
         # --- CORE -----------------------------------------------------------
@@ -263,7 +284,7 @@ def main():
         tgt_pct = (L/2)*CORE["alloc"]
         last_qld = px[CORE["symbol"]][max(px[CORE["symbol"]])]
         tgt_val = inav*tgt_pct; tgt_sh = int(round(tgt_val/last_qld))
-        cur_sh = pos.get(CORE["symbol"], 0.0); cur_val = cur_sh*last_qld
+        cur_sh = bpos.get(CORE["symbol"], 0.0); cur_val = cur_sh*last_qld
         drift = (cur_val-tgt_val)/inav*100
         out["buckets"]["core"] = dict(
             symbol=CORE["symbol"], vol=round(v,4), leverage=round(L,3), gate_on=on,
@@ -294,7 +315,7 @@ def main():
         legs = {}
         for s in SLEEVE["symbols"]:
             p = px[s][max(px[s])]; tv = s_inv/len(SLEEVE["symbols"])
-            cs_ = pos.get(s, 0.0)
+            cs_ = bpos.get(s, 0.0)
             legs[s] = dict(price=p, target_value=round(tv,2), target_shares=int(round(tv/p)),
                            current_shares=cs_, current_value=round(cs_*p,2))
         cur_s_val = sum(l["current_value"] for l in legs.values())
@@ -313,7 +334,7 @@ def main():
 
         # --- BALLAST --------------------------------------------------------
         bsym = BALLAST["symbol"]; bp = px[bsym][max(px[bsym])]
-        btv = inav*BALLAST["alloc"]; bcs = pos.get(bsym.replace(" ", ""), pos.get(bsym, 0.0))
+        btv = inav*BALLAST["alloc"]; bcs = bpos.get(bsym.replace(" ", ""), bpos.get(bsym, 0.0))
         bdrift = (bcs*bp-btv)/inav*100
         out["buckets"]["ballast"] = dict(
             symbol=bsym, price=bp, target_pct_nav=BALLAST["alloc"]*100,
@@ -342,6 +363,10 @@ def main():
               f"${out['legacy_value']:,.0f} = "
               + ", ".join(f"{k} {v['qty']:.0f}@${v['price']:.2f}"
                           for k, v in out["legacy"].items()))
+    if out["tactical"]["holdings"]:
+        print(f"  TACTICAL (tob.py, excluded from bucket drift): ${out['tactical']['value']:,.0f} = "
+              + ", ".join(f"{k} {v:.0f}" for k, v in out["tactical"]["holdings"].items())
+              + f"   active {', '.join(out['tactical']['active'])}")
     print(f"PORTFOLIO PLAYBOOK v3 — targets as of {out['asof']}   "
           f"investable ${out['investable_nav']:,.0f} of NAV ${out['nav']:,.0f}"
           + ("   [--establish: bands ignored]" if a.establish else "") + "\n")

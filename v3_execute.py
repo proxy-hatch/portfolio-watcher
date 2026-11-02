@@ -183,6 +183,11 @@ STALE_LIMIT_PCT = 0.02   # a resting limit >2% away from market is unlikely to f
 def get_resting(host, port, cid):
     """All resting orders, netted per symbol. Pending BUYs count toward the target."""
     from ib_async import IB
+    # Tactical-book orders (tob.py) belong to their ticket, not to a bucket. A resting
+    # tactical stop is a SELL of shares the engine already excludes; netting it would make
+    # the core BUY the same amount back the same night.
+    import tob
+    tactical = tob.order_perm_ids(tob.load())
     ib = IB(); ib.connect(host, port, clientId=cid, timeout=30)
     try:
         ib.reqAllOpenOrders(); ib.sleep(2)
@@ -191,7 +196,8 @@ def get_resting(host, port, cid):
             o, c = tr.order, tr.contract
             rec = out.setdefault(c.symbol, dict(net=0.0, orders=[]))
             signed = o.totalQuantity if o.action == "BUY" else -o.totalQuantity
-            rec["net"] += signed
+            is_tac = o.permId in tactical
+            if not is_tac: rec["net"] += signed
             # orderId comes back as 0 for any order this client did not place
             # (the three legacy TFSA sells report id=0, clientId=0). permId is the
             # only stable handle, and it is what a cancel/modify must key off.
@@ -201,7 +207,7 @@ def get_resting(host, port, cid):
                                       order_id=o.orderId, perm_id=o.permId,
                                       client_id=o.clientId,
                                       ours=(o.clientId == ORDER_CLIENT_ID and o.orderId),
-                                      status=tr.orderStatus.status))
+                                      tactical=is_tac, status=tr.orderStatus.status))
         return out
     finally:
         try: ib.disconnect()
@@ -251,8 +257,11 @@ def build_plan(t, resting):
 
     return plan, nav
 
-def add_funding(plan, t, resting):
+def add_funding(plan, t, resting, reserved=None):
     """
+    reserved: {account: $} already spoken for by tactical orders in this same run.
+    Tactical shares (engine `tactical.holdings_by_account`) are not the buckets' to sell,
+    and a resting tactical stop is not a queued bucket sale.
     Decide WHICH ACCOUNT each order goes to, and pay for every order without ever
     borrowing. Returns (orders_by_account, blocking_errors, notes).
 
@@ -277,15 +286,19 @@ def add_funding(plan, t, resting):
     avail = {a: float(v) for a, v in (t.get("available_by_account") or {}).items()}
     types = dict(DEFAULT_ACCOUNT_TYPES); types.update(t.get("account_types") or {})
     pos = {a: dict(d) for a, d in (t.get("positions_by_account") or {}).items()}
+    for a, d in ((t.get("tactical") or {}).get("holdings_by_account") or {}).items():
+        for s, q in d.items():
+            pos.setdefault(a, {})[s] = pos.get(a, {}).get(s, 0.0) - q
     accounts = set(cash) | set(avail) | set(pos)
     for prefs in ACCOUNT_PREFERENCE.values(): accounts |= set(prefs)
 
-    queued_sell, committed = {}, {}
+    queued_sell, committed = {}, dict(reserved or {})
     for sym, r in (resting or {}).items():
         for od in (r or {}).get("orders", []):
             acct = od.get("account")
             if not acct: continue
             if od.get("action") == "SELL":
+                if od.get("tactical"): continue
                 queued_sell[(acct, sym)] = queued_sell.get((acct, sym), 0.0) + float(od["qty"])
             elif od.get("action") == "BUY":
                 committed[acct] = committed.get(acct, 0.0) + float(od["qty"])*float(od.get("limit") or 0)
@@ -419,10 +432,15 @@ def check_rails(plan, nav, t):
         if cur and tgt and (tgt/cur > MAX_DELTA_RATIO or cur/tgt > MAX_DELTA_RATIO):
             errs.append(f"{k}: target {tgt} vs held {cur} differs by >{MAX_DELTA_RATIO}x "
                         f"— possible split/corporate action")
-    for k in ("core", "sleeve"):
+    # Per bucket: a DEFENSIVE sleeve says nothing about a QLD buy. This used to block any
+    # BUY while EITHER gate was off, which from the 2026-11-03 sleeve flip would have
+    # frozen every core buy-rebalance for as long as the sleeve stayed defensive.
+    gated = {"core": {t["buckets"]["core"].get("symbol")},
+             "sleeve": set(t["buckets"]["sleeve"].get("symbols") or [])}
+    for k, syms in gated.items():
         if not t["buckets"][k].get("gate_on", True) and any(
-                o["action"] == "BUY" for o in plan):
-            errs.append(f"{k} gate is DEFENSIVE but plan contains BUYs")
+                o["action"] == "BUY" and o["symbol"] in syms for o in plan):
+            errs.append(f"{k} gate is DEFENSIVE but plan contains {k} BUYs")
     if errs:
         return errs, notes
 
@@ -467,8 +485,48 @@ def rejection_note(errors, trade):
     return "; ".join(m for m in msgs if m)[:240]
 
 
+def build_order(o):
+    """Bucket orders: marketable GTC limit, regular hours. Tactical orders (tob.py) carry
+    their own shape: a GTD extended-hours entry limit, a broker-side TRAIL stop, or an
+    exit limit already priced by the ticket. Returns (order, limit_or_None)."""
+    from ib_async import Order, LimitOrder
+    if o.get("order_type") == "TRAIL":
+        order = Order(action=o["action"], totalQuantity=o["qty"], orderType="TRAIL",
+                      trailingPercent=float(o["trail_pct"]), trailStopPrice=float(o["trail_stop"]),
+                      tif="GTC")
+        lmt = None
+    else:
+        lmt = o.get("limit") or round(o["price"]*(1+COLLAR) if o["action"] == "BUY"
+                                      else o["price"]*(1-COLLAR), 2)
+        # GTC, not DAY: a DAY order that doesn't fill vanishes silently at the close and
+        # the system only notices a run later. A GTC order stays visible on the book,
+        # is netted against the target by the next run, and shows the stale ⚠ flag if
+        # it drifts far from market. Surviving the session is the safer failure mode.
+        order = LimitOrder(o["action"], o["qty"], lmt, tif=o.get("tif") or "GTC")
+        if order.tif == "GTD":
+            # the broker cancels it after the ticket's entry window; nothing to clean up
+            order.goodTillDate = f"{o['good_till'].replace('-', '')} 20:00:00 US/Eastern"
+    order.account = o["account"]
+    order.outsideRth = bool(o.get("outside_rth", False))
+    return order, lmt
+
+
+def cancel_for_replace(ib, perm):
+    """Cancel a resting tactical stop before its time-exit sell goes in. Returns None when
+    the stop is confirmed cancelled with nothing filled, else the reason not to sell —
+    a stop that already filled (even partly) means the shares are gone."""
+    tr = next((tr for tr in ib.openTrades() if tr.order.permId == int(perm)), None)
+    if tr is None: return f"stop {perm} not found on the book"
+    if tr.orderStatus.filled: return f"stop {perm} already filled {tr.orderStatus.filled:.0f}"
+    ib.cancelOrder(tr.order); ib.sleep(3)
+    if tr.orderStatus.status not in ("Cancelled", "ApiCancelled"):
+        return f"stop {perm} did not confirm cancel (status {tr.orderStatus.status})"
+    if tr.orderStatus.filled: return f"stop {perm} filled {tr.orderStatus.filled:.0f} while cancelling"
+    return None
+
+
 def place(plan, host, port, cid=None):
-    from ib_async import IB, Stock, LimitOrder
+    from ib_async import IB, Stock
     # Always the same client id so v3 can cancel/modify what it placed.
     ib = IB(); ib.connect(host, port, clientId=ORDER_CLIENT_ID, timeout=30)
     # SELLs first — but ONLY so a same-symbol reduce-then-add can never cross, NOT
@@ -509,15 +567,11 @@ def place(plan, host, port, cid=None):
             q = ib.qualifyContracts(c)
             if not q:
                 placed.append(dict(o, status="FAILED", note="cannot qualify")); continue
-            lmt = round(o["price"]*(1+COLLAR) if o["action"] == "BUY"
-                        else o["price"]*(1-COLLAR), 2)
-            # GTC, not DAY: a DAY order that doesn't fill vanishes silently at the close and
-            # the system only notices a run later. A GTC order stays visible on the book,
-            # is netted against the target by the next run, and shows the stale ⚠ flag if
-            # it drifts far from market. Surviving the session is the safer failure mode.
-            order = LimitOrder(o["action"], o["qty"], lmt, tif="GTC")
-            order.account = o["account"]
-            order.outsideRth = False
+            if o.get("cancel_perm"):
+                why = cancel_for_replace(ib, o["cancel_perm"])
+                if why:
+                    placed.append(dict(o, status="FAILED", note=why)); continue
+            order, lmt = build_order(o)
             tr = ib.placeOrder(q[0], order)
             ib.sleep(2.5)
             st = tr.orderStatus.status
@@ -549,10 +603,27 @@ def _scoped_positions(posacct, syms):
     return {a: {s: q for s, q in d.items() if s in syms}
             for a, d in (posacct or {}).items()}
 
+def record_tactical(placed, sess=None):
+    """Write tactical broker ids back onto their tickets. If this fails the order exists
+    but the ledger doesn't know it, and the next run would place a duplicate stop — so
+    a failure here trips the kill switch rather than being logged and forgotten."""
+    if not any(p.get("tob_id") for p in placed): return
+    try:
+        import tob
+        tob.record_placements(placed)
+    except Exception as e:
+        msg = f"tactical ledger NOT updated after placement: {e}"
+        open(KILL, "w").write(f"auto-tripped {dt.datetime.now().isoformat()}: {msg}\n")
+        emit(f"  🚨 {msg} — kill switch set; reconcile state/tactical.json by hand")
+        notify("🚨 v3 auto-exec DISABLED", msg[:250], "urgent")
+
+
 def save_plan(path, plan, t, resting):
     """Freeze the reviewed plan plus the state it assumed, so --live can verify it."""
+    import tob
     syms = _plan_scope(plan)
     snap = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
+            "tactical": tob.fingerprint(tob.load()),
             "asof": t["asof"], "nav": t["nav"],
             "investable_nav": t.get("investable_nav"), "plan": plan,
             "scope": sorted(syms),
@@ -581,6 +652,10 @@ def load_and_verify_plan(path, t, resting):
     now_rest = {k: v.get("net", 0) for k, v in (resting or {}).items() if k in syms}
     if now_rest != snap.get("resting"):
         errs.append("resting orders changed since review (plan symbols)")
+    if "tactical" in snap:
+        import tob
+        if json.loads(json.dumps(tob.fingerprint(tob.load()))) != snap["tactical"]:
+            errs.append("tactical book changed since review")
     # prices: an after-hours move can put every limit far from market
     live = {}
     for bk in t["buckets"].values():
@@ -624,6 +699,17 @@ def _main(a):
         print(f"KILL SWITCH ACTIVE ({KILL}):\n{open(KILL).read()}", file=sys.stderr)
         notify("v3 auto-exec halted", "Kill switch is set; no orders placed.", "high")
         sys.exit(4)
+
+    # Reconcile the tactical book BEFORE the engine reads it: an entry that filled since
+    # the last run must already be excluded from bucket drift, or the core trims it.
+    import tob
+    if not (a.live and a.plan) and tob.active(tob.load()):
+        try:
+            for al in tob.sync(a.host, a.port, a.client_id + 11):
+                emit(f"  TACTICAL: {al}")
+        except Exception as e:
+            n = bump_fail(f"tactical sync: {e}", key="tactical-sync")
+            emit(f"tactical book could not be reconciled ({n} malfunction(s)): {e}"); sys.exit(3)
 
     try:
         t = get_targets(a.establish, a.nav)
@@ -672,6 +758,7 @@ def _main(a):
             print(f"  {o['action']:<4} {o['qty']:>5} {o['symbol']:<6} @~${o['price']:>8.2f}  [{o['account']}]")
         placed = place(plan, a.host, a.port, a.client_id)
         log_audit(dict(mode="LIVE", replayed_from=a.plan, placed=placed))
+        record_tactical(placed, sess)
         ok = [p for p in placed if p["status"] == "PLACED"]
         # A broker rejection is a MALFUNCTION and must not clear the counter. This is
         # the path run.sh --live actually takes; the identical check further down only
@@ -704,7 +791,16 @@ def _main(a):
     mode = "LIVE" if a.live else "DRY RUN"
     print(f"v3_execute [{mode}]  asof {t['asof']}  NAV ${nav:,.0f}"
           + ("   ⚠ US market OPEN — orders will fill immediately, not rest to the open" if rth else ""))
-    if not plan:
+    # Tactical lifecycle orders: an approved entry, the stop once it fills, the time exit.
+    # Each ticket was approved by Shawn; the rails in tob.validate/plan_actions re-check it.
+    tac, tac_notes, tac_blocks = tob.plan_actions(tob.load(), t, resting)
+    for n_ in tac_notes: print(f"  TACTICAL: {n_}")
+    if tac_blocks:
+        for e in tac_blocks: emit(f"  BLOCKED: {e}")
+        log_audit(dict(mode=mode, blocked=tac_blocks, plan=plan + tac))
+        note_refusal("tactical: " + tac_blocks[0], key="tactical:" + tac_blocks[0][:40], session=sess)
+        sys.exit(2)
+    if not plan and not tac:
         print("  nothing to do — all buckets within band"); clear_fail(); return
 
     if resting:
@@ -732,6 +828,7 @@ def _main(a):
                 # only stable handle and cid!=1 orders are NOT ours to cancel/modify.
                 ref = f"#{od['order_id']}" if od.get("ours") else f"perm:{od.get('perm_id')}"
                 own = "" if od.get("ours") else f" [cid={od.get('client_id')} not ours]"
+                if od.get("tactical"): own += " [TOB — not netted against buckets]"
                 print(f"    {ref:<14} {od['action']:<4} {od['qty']:>5.0f} {sym:<6} "
                       f"{od['type']} {od['limit'] or ''} {od['tif']} [{od['account']}]{own}{far}")
         print()
@@ -754,10 +851,19 @@ def _main(a):
               f"({sum(o['notional'] for o in plan)/nav:.1%} NAV)")
         for o in plan:
             print(f"     {o['action']:<4} {o['qty']:>5} {o['symbol']:<6} = ${o['notional']:>10,.0f}")
-    if not plan:
+    if not plan and not tac:
         print("  nothing left after clamping"); clear_fail(); return
 
-    plan, fund_errs, fund_notes = add_funding(plan, t, resting)
+    # Tactical orders skip routing and clamps: the ticket fixed the account, and its size
+    # is bounded by tob's own caps. Their entry cash is reserved so bucket buys can't
+    # spend the same dollars.
+    reserved = {}
+    for o in tac:
+        if o["action"] == "BUY":
+            reserved[o["account"]] = reserved.get(o["account"], 0.0) + o["qty"]*o["limit"]
+    plan, fund_errs, fund_notes = (add_funding(plan, t, resting, reserved) if plan
+                                   else ([], [], []))
+    plan = plan + tac
     # Print the funding picture BEFORE any exit: on a shortfall this used to die at
     # sys.exit(2) before the funding legs were shown, so the reviewer saw a plan with
     # the funding half missing and no indication anything had gone wrong.
@@ -791,6 +897,7 @@ def _main(a):
         notify("🚨 v3 order placement FAILED", str(e)[:300], "urgent"); sys.exit(3)
 
     log_audit(dict(mode="LIVE", placed=placed, engine=t["buckets"]))
+    record_tactical(placed, sess)
     ok = [p for p in placed if p["status"] == "PLACED"]
     rej = [p for p in placed if p["status"] in ("REJECTED", "FAILED")]
     if rej:

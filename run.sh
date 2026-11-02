@@ -86,6 +86,19 @@ if ! /usr/bin/nc -z -G 5 127.0.0.1 4001 2>/dev/null && ! recover_gateway; then
   exit 69
 fi
 
+# ---------- 0b. tactical book: reconcile BEFORE the engine reads it ----------
+# A tactical entry that filled since the last run must be excluded from bucket drift, or
+# the core trims it tonight. No active bets -> no-op without touching IBKR.
+"$PY" "$DIR/tob.py" sync >> "$ERR" 2>&1; TRC=$?
+if (( TRC != 0 )); then
+  echo "[$(date)] tob.py sync failed rc=$TRC" >> "$ERR"
+  stamp "FAILED-tactical"
+  "$DIR/notify.sh" "🚨 Watcher $KIND — tactical book not reconciled" \
+    "tob.py sync rc=$TRC with active tactical bets; sizing around unknown fills is unsafe. No orders placed." urgent
+  exit 3
+fi
+TACTICAL="$("$PY" "$DIR/tob.py" list --active 2>&1)"
+
 # ---------- 1. deterministic targets ----------------------------------------
 say "2/5 computing targets (v3_engine.py) ..."
 # Capture the engine's REAL exit code. `if ! cmd; then RC=$?` captures the status of the
@@ -175,6 +188,13 @@ HARD LIMITS ON HOW YOU WORK (these keep this run from hanging):
   discarded. On 2026-09-05 and 2026-09-10 a stray 'find ~' cost the entire run this way.
 - The automation repo is /Users/shawn/workspace/portfolio-watcher.
   'claude-investment-clean' does NOT exist — never look for it.
+
+=== TACTICAL OPPORTUNITY BOOK (Playbook v3 §10) ===
+Orders tagged 'TOB <id>' come from a ticket Shawn approved at a terminal (entry) or from
+that ticket's pre-approved exit (trailing stop / time exit). They are NOT bucket orders and
+the engine already excludes their shares from drift. HALT only if a TOB order does not match
+its ticket below (symbol, side, quantity, account) — not because it sits outside a bucket.
+$TACTICAL
 
 === ENGINE TARGETS ===
 $(cat "$TARGETS")
