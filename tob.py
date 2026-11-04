@@ -274,6 +274,9 @@ def validate(bet, t, ledger, resting=None, stage="draft", signal=None, today=Non
                     f"NAV (${GROSS_CAP_PCT*inav:,.0f})")
     if len(others) >= MAX_ACTIVE: errs.append(f"already {len(others)} active bets (max {MAX_ACTIVE})")
     if any(b["setup"] == setup for b in others): errs.append(f"a setup-{setup} bet is already active")
+    # one bet per (account, symbol): its shares are then exactly position - baseline
+    if any(b["account"] == bet["account"] and b["symbol"] == sym for b in others):
+        errs.append(f"{bet['account']} already holds an active {sym} bet")
     # cooldown after a stop-out of the same setup
     for b in ledger.get("bets", []):
         if (b["setup"] == setup and b["status"] == "CLOSED" and b.get("exit_kind") == "STOP"
@@ -377,15 +380,42 @@ def _fill_from(snapshot, perm, bet_key, bet):
 DEAD = ("Cancelled", "ApiCancelled", "Inactive")
 
 
+def _close(bet, alerts, how):
+    held = bet.get("filled_qty") or 0
+    ep, xp = bet["fill_price"], bet["exit_price"]
+    bet["status"] = "CLOSED"; bet["closed_at"] = now_iso()
+    bet["pnl_usd"] = round((xp - ep)*held, 2)
+    bet["r_multiple"] = round((xp - ep)/(ep*bet["exit"]["stop_pct"]), 2)
+    est = " (price ESTIMATED)" if bet.get("exit_price_estimated") else ""
+    event(bet, f"closed by {bet['exit_kind']} @ {xp}{est} [{how}]: P&L ${bet['pnl_usd']:,.0f}, "
+               f"{bet['r_multiple']:+.2f}R")
+    alerts.append(f"{bet['id']}: CLOSED by {bet['exit_kind']} @ {xp}{est} "
+                  f"({bet['r_multiple']:+.2f}R, ${bet['pnl_usd']:,.0f})")
+
+
 def apply_broker(bet, snapshot, today=None):
     """Advance one bet's state from a broker snapshot. Pure — returns a list of alerts.
 
-    snapshot = {"orders": {perm_id: {status, filled, total}},   # open AND completed
+    snapshot = {"orders": {perm_id: {status, filled, total}},   # what the broker shows
                 "execs":  {perm_id: [{exec_id, shares, price, ts}]},
-                "positions": {account: {symbol: qty}}}"""
+                "positions": {account: {symbol: qty}},
+                "avg_cost":  {account: {symbol: avg cost}}}
+
+    POSITIONS ARE THE TRUTH once an order leaves the book. This gateway returns NO
+    completed orders and NO executions to the API (verified 2026-11-04: both lists empty
+    while the RRSP held the 135 QLD that T-20261102-QLD bought), so a filled order simply
+    vanishes. The bet's account is ring-fenced for its symbol (buckets never trade it
+    there), so `position - baseline_qty` is exactly the bet's shares. An order that is
+    gone with nothing to explain it is UNRECONCILED and blocks the run — on 11-03/11-04
+    the old code only alerted, and the core tried to sell 119 of the tactical shares."""
     today = today or dt.date.today()
     alerts = []
     st = bet["status"]
+    bet.pop("unreconciled", None)
+    pos = float(((snapshot.get("positions") or {}).get(bet["account"]) or {}).get(bet["symbol"], 0))
+    cost = ((snapshot.get("avg_cost") or {}).get(bet["account"]) or {}).get(bet["symbol"])
+    base = bet.get("baseline_qty")
+    implied = None if base is None else max(0, int(round(pos - base)))
 
     if st == "APPROVED" and not bet.get("entry_perm_id"):
         if weekdays_between(_date(bet["approved_at"]), today) > APPROVAL_VALID_SESSIONS:
@@ -396,63 +426,78 @@ def apply_broker(bet, snapshot, today=None):
     if st == "ENTRY_PLACED":
         perm = int(bet["entry_perm_id"])
         filled, status, avg = _fill_from(snapshot, perm, "entry_execs", bet)
-        known = perm in (snapshot.get("orders") or {})
-        bet["filled_qty"] = int(round(filled))
-        if avg: bet["fill_price"] = round(avg, 4)
         total = bet["entry"]["qty"]
-        done = status == "Filled" or filled >= total
-        dead = status in DEAD or (not known and _date(bet["entry"]["good_till"]) < today)
-        if done or (dead and filled > 0):
-            bet["status"] = "OPEN"; bet["fill_date"] = today.isoformat()
-            if not bet.get("fill_price"):
-                bet["fill_price"] = bet["entry"]["limit"]; bet["fill_price_estimated"] = True
-                alerts.append(f"{bet['id']}: entry filled but no execution rows visible — "
-                              f"fill price recorded as the limit {bet['entry']['limit']}")
-            bet["expiry_date"] = add_weekdays(today, bet["exit"]["max_sessions"]).isoformat()
-            event(bet, f"entry filled {bet['filled_qty']}/{total} @ {bet['fill_price']}; "
-                       f"time exit {bet['expiry_date']}")
-            alerts.append(f"{bet['id']}: entry FILLED {bet['filled_qty']} {bet['symbol']} "
-                          f"@ {bet['fill_price']} — the next run places the stop")
-        elif dead:
-            bet["status"] = "CANCELLED"; bet["closed_at"] = now_iso()
-            event(bet, f"entry ended unfilled ({status or 'not found at broker'})")
-            alerts.append(f"{bet['id']}: entry ended UNFILLED ({status or 'expired'})")
-        elif not known:
-            alerts.append(f"{bet['id']}: entry perm {perm} not visible at the broker yet")
+        on_book = perm in (snapshot.get("orders") or {}) and status not in DEAD + ("Filled",)
+        if on_book:
+            bet["filled_qty"] = int(round(filled))          # live partial: the book is exact
+            if avg: bet["fill_price"] = round(avg, 4)
+        elif implied is None:
+            bet["unreconciled"] = (f"entry {perm} is off the book and the account baseline is "
+                                   "unknown — cannot tell what filled")
+        else:
+            got = min(total, max(int(round(filled)), implied))
+            if got > 0:
+                bet["filled_qty"] = got
+                if avg: bet["fill_price"] = round(avg, 4)
+                elif cost and base == 0:
+                    # the whole position is this bet, so IBKR's average cost IS the fill
+                    # price (it includes commission — a few bps, recorded as such)
+                    bet["fill_price"] = round(float(cost), 4); bet["fill_price_source"] = "avg_cost"
+                else:
+                    bet["fill_price"] = bet["entry"]["limit"]; bet["fill_price_estimated"] = True
+                bet["status"] = "OPEN"; bet["fill_date"] = bet.get("fill_date") or today.isoformat()
+                bet["expiry_date"] = add_weekdays(_date(bet["fill_date"]), bet["exit"]["max_sessions"]).isoformat()
+                event(bet, f"entry filled {got}/{total} @ {bet['fill_price']} "
+                           f"({bet.get('fill_price_source') or ('executions' if avg else 'ESTIMATED = limit')}); "
+                           f"time exit {bet['expiry_date']}")
+                alerts.append(f"{bet['id']}: entry FILLED {got} {bet['symbol']} @ {bet['fill_price']} "
+                              "— the next run places the stop")
+            elif status in DEAD or _date(bet["entry"]["good_till"]) < today:
+                bet["status"] = "CANCELLED"; bet["closed_at"] = now_iso()
+                event(bet, f"entry ended unfilled ({status or 'expired off the book'})")
+                alerts.append(f"{bet['id']}: entry ended UNFILLED ({status or 'expired'})")
+            else:
+                bet["unreconciled"] = (f"entry {perm} is off the book before its expiry and no "
+                                       "shares arrived — cancelled, rejected or not yet visible?")
 
     elif st == "EXIT_PLACED":
         perm = int(bet["exit_perm_id"])
         filled, status, avg = _fill_from(snapshot, perm, "exit_execs", bet)
-        known = perm in (snapshot.get("orders") or {})
-        bet["exit_filled_qty"] = int(round(filled))
-        if avg: bet["exit_price"] = round(avg, 4)
-        held = (bet.get("filled_qty") or 0)
-        if status == "Filled" or filled >= held:
-            bet["status"] = "CLOSED"; bet["closed_at"] = now_iso()
-            if not bet.get("exit_price"):
-                bet["exit_price"] = bet.get("exit_limit") or bet.get("fill_price")
+        held = bet.get("filled_qty") or 0
+        on_book = perm in (snapshot.get("orders") or {}) and status not in DEAD + ("Filled",)
+        if on_book:
+            bet["exit_filled_qty"] = int(round(filled))
+            if avg: bet["exit_price"] = round(avg, 4)
+        elif implied is None:
+            bet["unreconciled"] = f"exit {perm} is off the book and the account baseline is unknown"
+        elif implied <= 0 or filled >= held:
+            bet["exit_filled_qty"] = held
+            if avg: bet["exit_price"] = round(avg, 4)
+            else:
+                # no execution rows: a time exit filled at or above its limit; a stop at
+                # roughly its stop level. Recorded as an estimate, never as a measurement.
+                bet["exit_price"] = bet.get("exit_limit") or bet.get("stop_level") or bet["fill_price"]
                 bet["exit_price_estimated"] = True
-            ep, xp = bet["fill_price"], bet["exit_price"]
-            bet["pnl_usd"] = round((xp - ep)*held, 2)
-            bet["r_multiple"] = round((xp - ep)/(ep*bet["exit"]["stop_pct"]), 2)
-            event(bet, f"closed by {bet['exit_kind']} @ {xp}: P&L ${bet['pnl_usd']:,.0f}, "
-                       f"{bet['r_multiple']:+.2f}R")
-            alerts.append(f"{bet['id']}: CLOSED by {bet['exit_kind']} @ {xp} "
-                          f"({bet['r_multiple']:+.2f}R, ${bet['pnl_usd']:,.0f})")
-        elif status in DEAD or not known:
+            _close(bet, alerts, "position" if not avg else "executions")
+        elif implied >= held:
             # nobody in this system cancels a stop except the time exit, which records
             # its own replacement — so a vanished exit means the bet is unprotected again
             bet["status"] = "OPEN"; bet.pop("exit_perm_id", None)
-            event(bet, f"exit order {perm} is gone ({status or 'not found'}) — back to OPEN")
-            alerts.append(f"{bet['id']}: exit order {perm} disappeared ({status or 'not found'}); "
-                          "the next run re-places it")
+            event(bet, f"exit order {perm} is gone ({status or 'off the book'}) with all "
+                       f"{held} shares still held — back to OPEN")
+            alerts.append(f"{bet['id']}: exit order {perm} disappeared; the next run re-places it")
+        else:
+            bet["unreconciled"] = (f"exit {perm} is off the book with {implied} of {held} shares "
+                                   "left — partial exit, reconcile by hand")
 
+    if bet.get("unreconciled"):
+        alerts.append(f"{bet['id']}: UNRECONCILED — {bet['unreconciled']}")
     # the account must still hold what the ledger says it does
     q = open_qty(bet)
-    if q > 0:
-        have = float(((snapshot.get("positions") or {}).get(bet["account"]) or {}).get(bet["symbol"], 0))
-        if have + 0.5 < q:
-            bet["mismatch"] = f"ledger {q} {bet['symbol']} but {bet['account']} holds {have:.0f}"
+    if q > 0 and not bet.get("unreconciled"):
+        need = (base or 0) + q
+        if pos + 0.5 < need:
+            bet["mismatch"] = f"ledger needs {need:.0f} {bet['symbol']} but {bet['account']} holds {pos:.0f}"
             alerts.append(f"{bet['id']}: MISMATCH — {bet['mismatch']}")
         else:
             bet.pop("mismatch", None)
@@ -481,11 +526,12 @@ def broker_snapshot(perm_ids, host="127.0.0.1", port=4001, cid=63):
             if e.permId in perm_ids:
                 execs.setdefault(e.permId, []).append(dict(
                     exec_id=e.execId, shares=float(e.shares), price=float(e.price), ts=str(e.time)))
-        positions = {}
+        positions, avg_cost = {}, {}
         for p in ib.positions():
             positions.setdefault(p.account, {})[p.contract.symbol] = float(p.position)
+            avg_cost.setdefault(p.account, {})[p.contract.symbol] = float(p.avgCost)
         return dict(orders={k: v for k, v in orders.items() if k in perm_ids}, execs=execs,
-                    positions=positions)
+                    positions=positions, avg_cost=avg_cost)
     finally:
         try: ib.disconnect()
         except Exception: pass
@@ -518,8 +564,9 @@ def plan_actions(ledger, t, resting=None, today=None):
                       "stale; refusing to plan around unknown tactical fills")
         return orders, notes, blocks
     for b in acts:
-        if b.get("mismatch"):
-            blocks.append(f"{b['id']}: {b['mismatch']} — fix the ledger before trading {b['symbol']}")
+        if b.get("mismatch") or b.get("unreconciled"):
+            blocks.append(f"{b['id']}: {b.get('mismatch') or b['unreconciled']} — fix the ledger "
+                          f"before trading {b['symbol']}")
             continue
         sym, last = b["symbol"], prices.get(b["symbol"])
         tag = f"TOB {b['id']} setup {b['setup']}"
@@ -529,7 +576,10 @@ def plan_actions(ledger, t, resting=None, today=None):
                 notes.append(f"{b['id']}: approved entry NOT placed — " + "; ".join(errs))
                 continue
             e = b["entry"]
+            # shares the account holds BEFORE the entry: positions above this are the bet's
+            base = (t.get("positions_by_account") or {}).get(b["account"], {}).get(sym, 0.0)
             orders.append(dict(symbol=sym, action="BUY", qty=e["qty"], price=e["limit"],
+                               baseline_qty=float(base),
                                limit=e["limit"], notional=e["qty"]*e["limit"], account=b["account"],
                                pending=0, tactical=True, tob_id=b["id"], tob_step="entry",
                                tif=e["tif"], good_till=e["good_till"], outside_rth=e["outside_rth"],
@@ -580,6 +630,7 @@ def record_placements(placed, ledger_path=None):
                 event(b, f"{p['tob_step']} {p['status']}: {p.get('note','')}"); continue
             if p["tob_step"] == "entry":
                 b["status"] = "ENTRY_PLACED"; b["entry_perm_id"] = p["perm_id"]
+                b["baseline_qty"] = p.get("baseline_qty")
                 b["entry_order_id"] = p.get("order_id"); b["entry_placed_at"] = now_iso()
             else:
                 b["status"] = "EXIT_PLACED"; b["exit_perm_id"] = p["perm_id"]
@@ -587,6 +638,7 @@ def record_placements(placed, ledger_path=None):
                 # a stop already breached at planning time is still a stop-out (cooldown applies)
                 b["exit_kind"] = "TIME" if p["tob_step"] == "time_exit" else "STOP"
                 if p.get("limit"): b["exit_limit"] = p["limit"]
+                if p.get("trail_stop"): b["stop_level"] = p["trail_stop"]
             event(b, f"{p['tob_step']} PLACED perm {p['perm_id']}: {p['action']} {p['qty']} "
                      f"{p['symbol']} " + (f"trail {p.get('trail_pct')}% stop {p.get('trail_stop')}"
                                          if p.get("order_type") == "TRAIL" else f"@ {p.get('limit')}"))

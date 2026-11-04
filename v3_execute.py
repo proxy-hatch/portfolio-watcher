@@ -292,6 +292,7 @@ def add_funding(plan, t, resting, reserved=None):
     accounts = set(cash) | set(avail) | set(pos)
     for prefs in ACCOUNT_PREFERENCE.values(): accounts |= set(prefs)
 
+    fence = {tuple(p) for p in ((t.get("tactical") or {}).get("ringfenced") or [])}
     queued_sell, committed = {}, dict(reserved or {})
     for sym, r in (resting or {}).items():
         for od in (r or {}).get("orders", []):
@@ -353,7 +354,8 @@ def add_funding(plan, t, resting, reserved=None):
     # 1. sells: take shares from the LEAST preferred account holding them
     for o in [o for o in plan if o["action"] == "SELL"]:
         prefs = ACCOUNT_PREFERENCE.get(o["symbol"]) or [o.get("account")]
-        holders = [a for a in pos if pos[a].get(o["symbol"], 0.0) > 0]
+        holders = [a for a in pos if pos[a].get(o["symbol"], 0.0) > 0
+                   and (a, o["symbol"]) not in fence]
         order = [a for a in reversed(prefs) if a in holders] + [a for a in holders if a not in prefs]
         left = int(o["qty"])
         for a in order:
@@ -371,6 +373,7 @@ def add_funding(plan, t, resting, reserved=None):
         for o in buys:
             prefs = ACCOUNT_PREFERENCE.get(o["symbol"]) or [o.get("account")]
             for a in (prefs[:1] if rnd == 0 else prefs[1:]):
+                if (a, o["symbol"]) in fence: continue    # tactical account for this symbol
                 rem = remaining[id(o)]
                 if rem <= 0: break
                 unit = o["price"]*CASH_BUFFER

@@ -85,8 +85,34 @@ class Drafting(unittest.TestCase):
 
 class Lifecycle(unittest.TestCase):
     def placed(self):
-        b = a_bet(); b.update(status="ENTRY_PLACED", entry_perm_id=111, approved_at="2026-11-02T10:00:00")
+        b = a_bet(); b.update(status="ENTRY_PLACED", entry_perm_id=111, approved_at="2026-11-02T10:00:00",
+                             baseline_qty=0.0)
         return b
+
+    def test_the_real_2026_11_03_fill_is_found_from_positions(self):
+        # this gateway returns no completed orders and no executions: the filled entry just
+        # vanishes from the book. The RRSP position is the only evidence, and it is enough.
+        b = self.placed()
+        snap = {"orders": {}, "execs": {}, "positions": {RRSP: {"QLD": 135.0}},
+                "avg_cost": {RRSP: {"QLD": 83.42741037037037}}}
+        tob.apply_broker(b, snap, dt.date(2026, 11, 4))
+        self.assertEqual((b["status"], b["filled_qty"]), ("OPEN", 135))
+        self.assertAlmostEqual(b["fill_price"], 83.4274, places=4)
+        self.assertEqual(b["fill_price_source"], "avg_cost")
+        self.assertEqual(tob.holdings(fresh([b])), {RRSP: {"QLD": 135}})
+
+    def test_off_the_book_with_no_shares_before_expiry_blocks_the_run(self):
+        b = self.placed()
+        tob.apply_broker(b, {"orders": {}, "execs": {}, "positions": {RRSP: {}}}, MON)
+        self.assertIn("unreconciled", b)
+        _, _, blocks = tob.plan_actions(fresh([b]), targets())
+        self.assertTrue(blocks)
+
+    def test_unknown_baseline_blocks_instead_of_guessing(self):
+        b = self.placed(); b.pop("baseline_qty")
+        tob.apply_broker(b, {"orders": {}, "execs": {}, "positions": {RRSP: {"QLD": 135}}}, MON)
+        self.assertEqual(b["status"], "ENTRY_PLACED")
+        self.assertIn("unreconciled", b)
 
     def test_entry_fill_opens_the_bet_with_execution_price(self):
         b = self.placed()
@@ -132,11 +158,23 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(b["r_multiple"], -1.0)
         self.assertEqual(tob.open_qty(b), 0)
 
-    def test_vanished_stop_reverts_to_open_and_flags_missing_shares(self):
-        b = self.placed(); b.update(status="EXIT_PLACED", filled_qty=135, fill_price=82.0,
+    def test_stop_that_vanished_with_the_shares_is_a_close(self):
+        b = self.placed(); b.update(status="EXIT_PLACED", filled_qty=135, fill_price=82.0, stop_level=65.6,
                                     exit_perm_id=222, exit_kind="STOP", expiry_date="2027-01-29")
         tob.apply_broker(b, {"orders": {}, "execs": {}, "positions": {RRSP: {"QLD": 0}}}, MON)
+        self.assertEqual((b["status"], b["exit_price"], b["r_multiple"]), ("CLOSED", 65.6, -1.0))
+        self.assertTrue(b["exit_price_estimated"])
+
+    def test_stop_that_vanished_with_shares_still_held_is_re_placed(self):
+        b = self.placed(); b.update(status="EXIT_PLACED", filled_qty=135, fill_price=82.0,
+                                    exit_perm_id=222, exit_kind="STOP", expiry_date="2027-01-29")
+        tob.apply_broker(b, {"orders": {}, "execs": {}, "positions": {RRSP: {"QLD": 135}}}, MON)
         self.assertEqual(b["status"], "OPEN")
+
+    def test_shares_missing_from_an_open_bet_blocks(self):
+        b = self.placed(); b.update(status="OPEN", filled_qty=135, fill_price=82.0, fill_date="2026-11-02",
+                                    expiry_date="2027-01-29")
+        tob.apply_broker(b, {"orders": {}, "execs": {}, "positions": {RRSP: {"QLD": 20}}}, MON)
         self.assertIn("mismatch", b)
         _, _, blocks = tob.plan_actions(fresh([b]), targets())
         self.assertTrue(blocks)                     # never re-place a stop on missing shares
@@ -151,6 +189,7 @@ class Monitor(unittest.TestCase):
         self.assertEqual((notes, blocks), ([], []))
         o, = orders
         self.assertEqual((o["action"], o["qty"], o["account"], o["tob_step"]), ("BUY", 135, RRSP, "entry"))
+        self.assertEqual(o["baseline_qty"], 0.0)
         order, lmt = v.build_order(o)
         self.assertEqual((order.orderType, order.tif, order.outsideRth, lmt), ("LMT", "GTD", True, 83.42))
         self.assertEqual(order.goodTillDate, "20261104 20:00:00 US/Eastern")
@@ -206,6 +245,28 @@ class ExecutorInteraction(unittest.TestCase):
         out, errs, notes = v.add_funding([sell], t, {})
         legs = {(o["symbol"], o["account"]): o["qty"] for o in out if o["symbol"] == "QLD"}
         self.assertEqual(legs, {("QLD", TFSA): 200})
+
+    def test_the_real_2026_11_03_core_trim_stays_out_of_the_tactical_account(self):
+        # the 11-03 plan routed SELL 119 QLD to the RRSP, which held only the tactical lot
+        t = targets(qld={TFSA: 950, RRSP: 135},
+                    tac={"holdings_by_account": {}, "ringfenced": [[RRSP, "QLD"]]})
+        sell = dict(symbol="QLD", action="SELL", qty=119, price=80.30, notional=119*80.30,
+                    reason="t", account=TFSA, pending=0)
+        out, _, _ = v.add_funding([sell], t, {})
+        self.assertEqual({(o["symbol"], o["account"]): o["qty"] for o in out if o["symbol"] == "QLD"},
+                         {("QLD", TFSA): 119})
+        buy = dict(symbol="QLD", action="BUY", qty=20, price=80.30, notional=20*80.30,
+                   reason="t", account=TFSA, pending=0)
+        t2 = targets(cash={TFSA: 0, RRSP: 16000, MRGN: 0}, sgov={RRSP: 0, MRGN: 0},
+                     tac={"ringfenced": [[RRSP, "QLD"]]})
+        out, _, _ = v.add_funding([buy], t2, {})
+        self.assertFalse(any(o["symbol"] == "QLD" and o["account"] == RRSP for o in out))
+
+    def test_one_bet_per_account_and_symbol(self):
+        a = a_bet(); a.update(id="T-20261101-QLD", status="OPEN", setup="B")
+        b = a_bet()
+        errs = tob.validate(b, targets(), {"bets": [a]}, signal=SIG_OK, today=MON)
+        self.assertTrue(any("already holds an active QLD bet" in e for e in errs))
 
     def test_reserved_tactical_cash_is_not_spent_twice(self):
         t = targets(cash={TFSA: 0, RRSP: 16626.75, MRGN: 0}, sgov={RRSP: 0, MRGN: 0})

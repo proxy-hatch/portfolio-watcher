@@ -273,6 +273,9 @@ def main():
                             "value": round(sum(q*px[s][max(px[s])] for s, q in tac_sym.items()
                                                if s in px), 2),
                             "active": [b["id"] for b in tob.active(led)],
+                            # (account, symbol) pairs bucket orders must not trade: the bet's
+                            # shares are tracked as position - baseline in that account
+                            "ringfenced": sorted({(b["account"], b["symbol"]) for b in tob.active(led)}),
                             "synced_at": led.get("synced_at")},
                "buckets": {}}
 
